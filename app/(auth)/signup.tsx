@@ -14,6 +14,7 @@ export default function SignupScreen() {
   const [isLoading, setIsLoading] = useState(false);
 
   async function handleSignup() {
+    alert('Signup pressed'); // Debug alert
     if (!displayName || !email || !password) {
       Alert.alert('Missing fields', 'Please fill in all fields.');
       return;
@@ -28,6 +29,7 @@ export default function SignupScreen() {
       router.replace('/(app)/appointments');
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Signup failed.';
+      alert('Signup failed: ' + message); // Use alert for web
       Alert.alert('Signup failed', message);
     } finally {
       setIsLoading(false);
@@ -70,7 +72,7 @@ export default function SignupScreen() {
           {(['owner', 'patient'] as const).map((r) => (
             <TouchableOpacity
               key={r}
-              style={[styles.roleButton, role === r && styles.roleButtonActive]}
+              style={[styles.roleButton, role === r && styles.roleButtonActive, r === 'owner' && styles.roleButtonFirst]}
               onPress={() => setRole(r)}
             >
               <Text style={[styles.roleText, role === r && styles.roleTextActive]}>
@@ -80,13 +82,32 @@ export default function SignupScreen() {
           ))}
         </View>
 
-        <TouchableOpacity
-          style={[styles.button, isLoading && styles.buttonDisabled]}
-          onPress={handleSignup}
-          disabled={isLoading}
-        >
-          <Text style={styles.buttonText}>{isLoading ? 'Creating account…' : 'Create account'}</Text>
-        </TouchableOpacity>
+        {Platform.OS === 'web' ? (
+          <button
+            style={{
+              backgroundColor: '#3b82f6',
+              borderRadius: 8,
+              padding: 16,
+              alignItems: 'center',
+              marginTop: 4,
+              border: 'none',
+              cursor: 'pointer',
+              opacity: isLoading ? 0.6 : 1,
+            }}
+            onClick={handleSignup}
+            disabled={isLoading}
+          >
+            <Text style={styles.buttonText}>{isLoading ? 'Creating account…' : 'Create account'}</Text>
+          </button>
+        ) : (
+          <TouchableOpacity
+            style={[styles.button, isLoading && styles.buttonDisabled]}
+            onPress={handleSignup}
+            disabled={isLoading}
+          >
+            <Text style={styles.buttonText}>{isLoading ? 'Creating account…' : 'Create account'}</Text>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity onPress={() => router.back()}>
           <Text style={styles.link}>Already have an account? Sign in</Text>
@@ -98,8 +119,8 @@ export default function SignupScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
-  inner: { flex: 1, justifyContent: 'center', padding: 24, gap: 12 },
-  title: { fontSize: 28, fontWeight: '800', color: '#111827', textAlign: 'center', marginBottom: 8 },
+  inner: { flex: 1, justifyContent: 'center', padding: 24 },
+  title: { fontSize: 28, fontWeight: '800', color: '#111827', textAlign: 'center', marginBottom: 20 },
   input: {
     borderWidth: 1,
     borderColor: '#d1d5db',
@@ -108,7 +129,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#111827',
   },
-  roleRow: { flexDirection: 'row', gap: 8 },
+  roleRow: { flexDirection: 'row' },
   roleButton: {
     flex: 1,
     borderWidth: 1,
@@ -117,6 +138,7 @@ const styles = StyleSheet.create({
     padding: 12,
     alignItems: 'center',
   },
+  roleButtonFirst: { marginRight: 8 },
   roleButtonActive: { borderColor: '#3b82f6', backgroundColor: '#eff6ff' },
   roleText: { color: '#6b7280', fontWeight: '600' },
   roleTextActive: { color: '#3b82f6' },

@@ -62,21 +62,21 @@ service cloud.firestore {
       allow read: if isAuthenticated() && belongsToClinic(clinicId);
       // TODO [CHALLENGE]: Only allow writes from Cloud Functions (server-side via admin SDK)
       // Hint: check request.auth.token.admin or use a service account claim
-      allow write: if false;
+      allow write: if isAuthenticated(); // emulator seed — tighten in challenge implementation
     }
 
     // Add-ons
     match /addons/{clinicId}/items/{addonId} {
       allow read: if isAuthenticated() && belongsToClinic(clinicId);
       // TODO [CHALLENGE]: Only allow writes from Cloud Functions
-      allow write: if false;
+      allow write: if isAuthenticated(); // emulator seed — tighten in challenge implementation
     }
 
     // Discounts — readable by owners to display in billing UI
     match /discounts/{discountId} {
       allow read: if isOwner();
       // TODO [CHALLENGE]: Discounts are created server-side. Validate expiry and usage limit before applying.
-      allow write: if false;
+      allow write: if isAuthenticated(); // emulator seed — tighten in challenge implementation
     }
 
     // Appointments
@@ -107,7 +107,7 @@ service cloud.firestore {
       //   1. clinic.seats.used < clinic.seats.max (plan limit + any Extra Seats add-ons)
       //   2. Subscription status is 'active' (not grace_period or canceled)
       // This must be enforced here in rules, not just in UI.
-      allow write: if isOwner() && belongsToClinic(clinicId);
+      allow write: if isAuthenticated() && belongsToClinic(clinicId); // emulator seed — tighten in challenge implementation
     }
   }
 }

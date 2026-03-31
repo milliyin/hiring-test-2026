@@ -2,9 +2,11 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import Stripe from 'stripe';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-09-30.acacia',
-});
+let _stripe: Stripe | null = null;
+function getStripe(): Stripe {
+  if (!_stripe) _stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2025-02-24.acacia' });
+  return _stripe;
+}
 
 const GRACE_PERIOD_DAYS = 7; // Document: chosen to match Stripe's own retry window
 
@@ -26,7 +28,7 @@ export const handleStripeWebhook = functions.https.onRequest(async (req, res) =>
   let event: Stripe.Event;
 
   try {
-    event = stripe.webhooks.constructEvent(req.rawBody, sig!, webhookSecret);
+    event = getStripe().webhooks.constructEvent(req.rawBody, sig!, webhookSecret);
   } catch (err) {
     console.error('Webhook signature verification failed:', err);
     res.status(400).send('Webhook Error');

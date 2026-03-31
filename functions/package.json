@@ -2,6 +2,7 @@
   "name": "clinic-billing-functions",
   "version": "0.1.0",
   "private": true,
+  "main": "lib/index.js",
   "engines": { "node": "20" },
   "scripts": {
     "build": "tsc",

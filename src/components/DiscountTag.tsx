@@ -31,7 +31,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#d1fae5',
     borderRadius: 6,
     padding: 8,
-    gap: 2,
   },
   tagExpired: {
     backgroundColor: '#f3f4f6',
@@ -40,6 +39,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#065f46',
+    marginBottom: 2,
   },
   detail: {
     fontSize: 12,

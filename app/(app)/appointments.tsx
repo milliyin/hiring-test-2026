@@ -77,17 +77,17 @@ export default function AppointmentsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f9fafb' },
-  list: { padding: 16, gap: 12 },
+  list: { padding: 16 },
   card: {
     backgroundColor: '#fff',
     borderRadius: 10,
     padding: 16,
-    gap: 4,
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
     elevation: 2,
+    marginBottom: 12,
   },
   cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   date: { fontSize: 15, fontWeight: '600', color: '#111827' },
@@ -98,7 +98,7 @@ const styles = StyleSheet.create({
   status_confirmed: { backgroundColor: '#d1fae5', color: '#065f46' },
   status_completed: { backgroundColor: '#f3f4f6', color: '#374151' },
   status_canceled:  { backgroundColor: '#fee2e2', color: '#991b1b' },
-  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32, gap: 8 },
-  emptyText: { fontSize: 17, fontWeight: '600', color: '#374151' },
+  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
+  emptyText: { fontSize: 17, fontWeight: '600', color: '#374151', marginBottom: 8 },
   emptyHint: { fontSize: 14, color: '#9ca3af', textAlign: 'center' },
 });

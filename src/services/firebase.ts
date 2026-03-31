@@ -1,4 +1,8 @@
-import { getApp, getApps, initializeApp } from '@react-native-firebase/app';
+import { Platform } from 'react-native';
+
+const firebaseModule = Platform.OS === 'web' ? require('firebase/app') : require('@react-native-firebase/app');
+
+const { getApp, getApps, initializeApp } = firebaseModule;
 
 const firebaseConfig = {
   apiKey:            process.env.EXPO_PUBLIC_FIREBASE_API_KEY!,

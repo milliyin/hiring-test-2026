@@ -40,8 +40,8 @@ export function SeatUsageBar({ used, max }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { gap: 6 },
-  labelRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  container: { },
+  labelRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   label: { fontSize: 14, color: '#6b7280' },
   count: { fontSize: 14, fontWeight: '600', color: '#111827' },
   countAtLimit: { color: '#ef4444' },

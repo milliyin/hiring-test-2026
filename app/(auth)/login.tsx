@@ -12,6 +12,7 @@ export default function LoginScreen() {
   const [isLoading, setIsLoading] = useState(false);
 
   async function handleLogin() {
+    alert('Login pressed'); // Debug alert
     if (!email || !password) {
       Alert.alert('Missing fields', 'Please enter your email and password.');
       return;
@@ -22,6 +23,7 @@ export default function LoginScreen() {
       router.replace('/(app)/appointments');
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Login failed. Check your credentials.';
+      alert('Login failed: ' + message); // Use alert for web
       Alert.alert('Login failed', message);
     } finally {
       setIsLoading(false);
@@ -55,13 +57,32 @@ export default function LoginScreen() {
           autoComplete="password"
         />
 
-        <TouchableOpacity
-          style={[styles.button, isLoading && styles.buttonDisabled]}
-          onPress={handleLogin}
-          disabled={isLoading}
-        >
-          <Text style={styles.buttonText}>{isLoading ? 'Signing in…' : 'Sign in'}</Text>
-        </TouchableOpacity>
+        {Platform.OS === 'web' ? (
+          <button
+            style={{
+              backgroundColor: '#3b82f6',
+              borderRadius: 8,
+              padding: 16,
+              alignItems: 'center',
+              marginTop: 4,
+              border: 'none',
+              cursor: 'pointer',
+              opacity: isLoading ? 0.6 : 1,
+            }}
+            onClick={handleLogin}
+            disabled={isLoading}
+          >
+            <Text style={styles.buttonText}>{isLoading ? 'Signing in…' : 'Sign in'}</Text>
+          </button>
+        ) : (
+          <TouchableOpacity
+            style={[styles.button, isLoading && styles.buttonDisabled]}
+            onPress={handleLogin}
+            disabled={isLoading}
+          >
+            <Text style={styles.buttonText}>{isLoading ? 'Signing in…' : 'Sign in'}</Text>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity onPress={() => router.push('/(auth)/signup')}>
           <Text style={styles.link}>Don't have an account? Sign up</Text>
@@ -73,9 +94,9 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
-  inner: { flex: 1, justifyContent: 'center', padding: 24, gap: 12 },
+  inner: { flex: 1, justifyContent: 'center', padding: 24 },
   title: { fontSize: 28, fontWeight: '800', color: '#111827', textAlign: 'center' },
-  subtitle: { fontSize: 16, color: '#6b7280', textAlign: 'center', marginBottom: 8 },
+  subtitle: { fontSize: 16, color: '#6b7280', textAlign: 'center', marginBottom: 20 },
   input: {
     borderWidth: 1,
     borderColor: '#d1d5db',

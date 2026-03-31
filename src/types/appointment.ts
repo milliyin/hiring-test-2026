@@ -1,4 +1,7 @@
-import { Timestamp } from '@react-native-firebase/firestore';
+import { Platform } from 'react-native';
+
+const firestoreModule = Platform.OS === 'web' ? require('firebase/firestore') : require('@react-native-firebase/firestore');
+const Timestamp = Platform.OS === 'web' ? firestoreModule.Timestamp : firestoreModule.default.Timestamp;
 
 export type AppointmentStatus = 'scheduled' | 'confirmed' | 'completed' | 'canceled';
 

@@ -21,7 +21,7 @@ import {
 } from 'firebase/firestore';
 import {
   getAuth, connectAuthEmulator,
-  createUserWithEmailAndPassword, updateProfile,
+  createUserWithEmailAndPassword, updateProfile,signInWithEmailAndPassword,
 } from 'firebase/auth';
 
 const firebaseConfig = {
@@ -167,6 +167,7 @@ async function seed() {
 
   // Appointments
   console.log('\nCreating appointments...');
+  await signInWithEmailAndPassword(auth, 'sophie.owner@test.com', 'test1234');
   const makeDate = (daysFromNow: number, hour: number) => {
     const d = new Date();
     d.setDate(d.getDate() + daysFromNow);

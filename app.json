@@ -5,7 +5,11 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "clinicapp",
-    "platforms": ["ios", "android", "web"],
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "ch.blackcode.clinictest"
@@ -15,7 +19,13 @@
     },
     "plugins": [
       "@react-native-firebase/app",
-      "@stripe/stripe-react-native"
+      [
+        "@stripe/stripe-react-native",
+        {
+          "merchantIdentifier": "merchant.ch.blackcode.clinictest"
+        }
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true

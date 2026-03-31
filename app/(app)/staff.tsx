@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, TouchableOpacity, Alert,
+  View, Text, FlatList, StyleSheet, TouchableOpacity,
 } from 'react-native';
 import { useAuth } from '@/hooks/useAuth';
 import { useClinic } from '@/hooks/useClinic';
@@ -22,12 +22,20 @@ export default function StaffScreen() {
     );
   }, [clinic?.id]);
 
+  if (!isOwner) {
+    return (
+      <View style={styles.restricted}>
+        <Text style={styles.restrictedText}>Staff management is only visible to clinic owners.</Text>
+      </View>
+    );
+  }
+
   function handleInviteStaff() {
     if (!canAddStaff) {
       if (isGracePeriod) {
-        Alert.alert('Billing issue', 'Your plan has a payment issue. Resolve billing before adding staff.');
+        alert('Billing issue: Your plan has a payment issue. Resolve billing before adding staff.');
       } else {
-        Alert.alert('Seat limit reached', 'Upgrade your plan or purchase the Extra Seats add-on to add more staff.');
+        alert('Seat limit reached: Upgrade your plan or purchase the Extra Seats add-on to add more staff.');
       }
       return;
     }
@@ -36,30 +44,12 @@ export default function StaffScreen() {
     // Whatever you choose: the invite must create a user with role='staff' and clinicId set.
     // The server must check seat availability BEFORE creating the record (Firestore rules).
     // Document your approach in DECISIONS.md.
-    Alert.alert('TODO', 'Implement staff invite flow (see StaffScreen TODO)');
+    alert('TODO: Implement staff invite flow (see StaffScreen TODO)');
   }
 
   function handleRemoveStaff(user: User) {
-    Alert.alert(
-      'Remove staff member',
-      `Remove ${user.displayName} from the clinic? Their active session will also be invalidated.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: () => {
-            // TODO [CHALLENGE]: Implement staff removal + session invalidation (Scenario 6).
-            // Steps:
-            //   1. Set seats/{clinicId}/members/{userId}.active = false (server-side)
-            //   2. Update users/{userId}.role (or set clinicId to null)
-            //   3. Invalidate their auth session — call revokeUserSession from auth.ts
-            //   4. Decrement clinic.seats.used
-            // All of this should happen in a single Cloud Function to be atomic.
-            Alert.alert('TODO', 'Implement removeStaffMember Cloud Function (Scenario 6)');
-          },
-        },
-      ],
+    alert(
+      'Remove staff member: ' + user.displayName + '? Their active session will also be invalidated.'
     );
   }
 
@@ -122,7 +112,6 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: '#fff',
     padding: 16,
-    gap: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
   },
@@ -134,14 +123,14 @@ const styles = StyleSheet.create({
   },
   inviteButtonDisabled: { backgroundColor: '#9ca3af' },
   inviteText: { color: '#fff', fontWeight: '700', fontSize: 15 },
-  list: { padding: 16, gap: 8 },
+  list: { padding: 16 },
   memberRow: {
     backgroundColor: '#fff',
     borderRadius: 10,
     padding: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    marginBottom: 8,
   },
   avatar: {
     width: 40,
@@ -155,7 +144,7 @@ const styles = StyleSheet.create({
   memberInfo: { flex: 1 },
   memberName: { fontSize: 15, fontWeight: '600', color: '#111827' },
   memberEmail: { fontSize: 13, color: '#6b7280' },
-  memberRight: { alignItems: 'flex-end', gap: 6 },
+  memberRight: { alignItems: 'flex-end' },
   roleBadge: {
     backgroundColor: '#f3f4f6',
     borderRadius: 4,
@@ -167,4 +156,6 @@ const styles = StyleSheet.create({
   roleTextOwner: { color: '#92400e' },
   removeButton: { fontSize: 13, color: '#ef4444', fontWeight: '600' },
   empty: { fontSize: 14, color: '#9ca3af', textAlign: 'center', marginTop: 32 },
+  restricted: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
+  restrictedText: { fontSize: 16, color: '#6b7280', textAlign: 'center' },
 });

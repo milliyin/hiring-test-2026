@@ -3,12 +3,16 @@
 // The client calls Firebase Functions, which call Stripe server-side.
 // This keeps the Stripe secret key off the device.
 
-import functions from '@react-native-firebase/functions';
+import { Platform } from 'react-native';
+import { firebaseApp } from './firebase';
+
+const functionsModule = Platform.OS === 'web' ? require('firebase/functions') : require('@react-native-firebase/functions');
+const functions = Platform.OS === 'web' ? functionsModule.getFunctions(firebaseApp) : functionsModule.default;
 
 const USE_EMULATOR = process.env.EXPO_PUBLIC_USE_EMULATOR === 'true';
 const EMULATOR_HOST = process.env.EXPO_PUBLIC_EMULATOR_HOST ?? 'localhost';
 
-if (USE_EMULATOR) {
+if (USE_EMULATOR && Platform.OS !== 'web') {
   functions().useEmulator(EMULATOR_HOST, 5001);
 }
 

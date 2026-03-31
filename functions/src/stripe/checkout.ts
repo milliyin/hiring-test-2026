@@ -2,9 +2,11 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import Stripe from 'stripe';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-09-30.acacia',
-});
+let _stripe: Stripe | null = null;
+function getStripe(): Stripe {
+  if (!_stripe) _stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2025-02-24.acacia' });
+  return _stripe;
+}
 
 // Stripe Price IDs — set these in Firebase config or environment variables
 // Replace with real price IDs from your Stripe dashboard
@@ -21,10 +23,10 @@ const PRICE_IDS: Record<string, string> = {
  * Creates a Stripe Checkout session for plan upgrades.
  * Called from the React Native app via Firebase Functions callable.
  */
-export const createCheckoutSession = functions.https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
+export const createCheckoutSession = functions.https.onCall(async (request) => {
+  if (!request.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
 
-  const { clinicId, plan, discountCode } = data as {
+  const { clinicId, plan, discountCode } = request.data as {
     clinicId: string;
     plan: 'pro' | 'premium' | 'vip';
     discountCode?: string;
@@ -33,7 +35,7 @@ export const createCheckoutSession = functions.https.onCall(async (data, context
   const db = admin.firestore();
 
   // Verify caller is the clinic owner
-  const userDoc = await db.collection('users').doc(context.auth.uid).get();
+  const userDoc = await db.collection('users').doc(request.auth.uid).get();
   const user = userDoc.data();
   if (!user || user.role !== 'owner' || user.clinicId !== clinicId) {
     throw new functions.https.HttpsError('permission-denied', 'Only clinic owners can manage billing');
@@ -49,7 +51,7 @@ export const createCheckoutSession = functions.https.onCall(async (data, context
   } else {
     const clinicDoc = await db.collection('clinics').doc(clinicId).get();
     const clinic = clinicDoc.data();
-    const customer = await stripe.customers.create({
+    const customer = await getStripe().customers.create({
       email: user.email,
       name: clinic?.name,
       metadata: { clinicId },
@@ -69,7 +71,7 @@ export const createCheckoutSession = functions.https.onCall(async (data, context
     console.log('TODO [CHALLENGE]: Validate and apply discount code:', discountCode);
   }
 
-  const session = await stripe.checkout.sessions.create({
+  const session = await getStripe().checkout.sessions.create({
     customer: customerId,
     mode: 'subscription',
     line_items: [{ price: PRICE_IDS[plan], quantity: 1 }],
@@ -85,10 +87,10 @@ export const createCheckoutSession = functions.https.onCall(async (data, context
 /**
  * Purchases an add-on for a clinic.
  */
-export const purchaseAddon = functions.https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
+export const purchaseAddon = functions.https.onCall(async (request) => {
+  if (!request.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
 
-  const { clinicId, addonType, discountCode } = data as {
+  const { clinicId, addonType, discountCode } = request.data as {
     clinicId: string;
     addonType: 'extra_storage' | 'extra_seats' | 'advanced_analytics';
     discountCode?: string;
@@ -113,10 +115,10 @@ export const purchaseAddon = functions.https.onCall(async (data, context) => {
 /**
  * Initiates a plan downgrade with seat conflict detection.
  */
-export const initiateDowngrade = functions.https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
+export const initiateDowngrade = functions.https.onCall(async (request) => {
+  if (!request.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
 
-  const { clinicId, targetPlan } = data as {
+  const { clinicId, targetPlan } = request.data as {
     clinicId: string;
     targetPlan: 'free' | 'pro' | 'premium';
   };
@@ -145,10 +147,10 @@ export const initiateDowngrade = functions.https.onCall(async (data, context) =>
  * Removes a staff member and invalidates their session.
  * Must be atomic: seat decrement + role update + session revocation in one operation.
  */
-export const removeStaffMember = functions.https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
+export const removeStaffMember = functions.https.onCall(async (request) => {
+  if (!request.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
 
-  const { clinicId, targetUserId } = data as { clinicId: string; targetUserId: string };
+  const { clinicId, targetUserId } = request.data as { clinicId: string; targetUserId: string };
 
   // TODO [CHALLENGE]: Implement staff removal + session invalidation (Scenario 6).
   // Steps:

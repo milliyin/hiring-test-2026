@@ -148,13 +148,12 @@ export default function BillingScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f9fafb' },
-  content: { padding: 16, gap: 4, paddingBottom: 40 },
+  content: { padding: 16, paddingBottom: 40 },
   section: {
     backgroundColor: '#fff',
     borderRadius: 10,
     padding: 16,
     marginBottom: 12,
-    gap: 10,
   },
   sectionTitle: { fontSize: 13, fontWeight: '700', color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.5 },
   planRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -186,7 +185,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 8,
   },
-  addonCardRight: { alignItems: 'flex-end', gap: 4 },
+  addonCardRight: { alignItems: 'flex-end' },
   addonName: { fontSize: 14, fontWeight: '600', color: '#111827' },
   addonDesc: { fontSize: 12, color: '#6b7280', maxWidth: 200 },
   addonPrice: { fontSize: 14, fontWeight: '700', color: '#111827' },

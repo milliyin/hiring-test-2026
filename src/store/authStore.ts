@@ -1,13 +1,26 @@
 import { create } from 'zustand';
-import auth from '@react-native-firebase/auth';
+import { Platform } from 'react-native';
+import { firebaseApp } from '@/services/firebase';
+
+const authModule = Platform.OS === 'web' ? require('firebase/auth') : require('@react-native-firebase/auth');
+const auth = Platform.OS === 'web' ? authModule.getAuth(firebaseApp) : authModule.default;
+
 import { getUser } from '@/services/firestore';
 import type { User } from '@/types/user';
 
+const USE_EMULATOR = process.env.EXPO_PUBLIC_USE_EMULATOR === 'true';
+const EMULATOR_HOST = process.env.EXPO_PUBLIC_EMULATOR_HOST ?? 'localhost';
+
+if (USE_EMULATOR && Platform.OS === 'web') {
+  const { connectAuthEmulator } = authModule;
+  connectAuthEmulator(auth, `http://${EMULATOR_HOST}:9099`);
+}
+
 type AuthState = {
-  firebaseUser: import('@react-native-firebase/auth').FirebaseAuthTypes.User | null;
+  firebaseUser: any; // Platform-specific user type
   userProfile: User | null;
   isLoading: boolean;
-  setFirebaseUser: (user: import('@react-native-firebase/auth').FirebaseAuthTypes.User | null) => void;
+  setFirebaseUser: (user: any) => void;
   loadUserProfile: (uid: string) => Promise<void>;
   reset: () => void;
 };
@@ -29,7 +42,8 @@ export const useAuthStore = create<AuthState>((set) => ({
 
 // Set up the Firebase Auth listener — call once at app startup
 export function initAuthListener(): () => void {
-  return auth().onAuthStateChanged(async (user) => {
+  const authInstance = Platform.OS === 'web' ? auth : auth();
+  return authInstance.onAuthStateChanged(async (user) => {
     const { setFirebaseUser, loadUserProfile, reset } = useAuthStore.getState();
     if (user) {
       setFirebaseUser(user);
