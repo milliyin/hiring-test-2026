@@ -8,7 +8,7 @@ type Props = {
 
 export function SeatUsageBar({ used, max }: Props) {
   const isUnlimited = max === Infinity;
-  const percentage = isUnlimited ? 0 : Math.min(used / max, 1);
+  const percentage = isUnlimited ? 0 : max === 0 ? 0 : Math.min(used / max, 1);
   const isNearLimit = !isUnlimited && percentage >= 0.8;
   const isAtLimit = !isUnlimited && used >= max;
 
