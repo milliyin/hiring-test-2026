@@ -7,7 +7,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useClinic } from '@/hooks/useClinic';
 import { useSubscription } from '@/hooks/useSubscription';
 import { signOut } from '@/services/auth';
-import { createCheckoutSession } from '@/services/stripe';
+import { createCheckoutSession, initiateDowngrade } from '@/services/stripe';
 import { PlanBadge } from '@/components/PlanBadge';
 import { PLAN_CONFIG } from '@/types/subscription';
 import type { Plan } from '@/types/subscription';
@@ -20,6 +20,8 @@ export default function SettingsScreen() {
   const { clinic } = useClinic();
   const { plan, status } = useSubscription();
   const [isUpgrading, setIsUpgrading] = useState(false);
+  const [isDowngrading, setIsDowngrading] = useState(false);
+  const [downgradeMessage, setDowngradeMessage] = useState<{ type: 'error' | 'conflict' | 'success'; text: string } | null>(null);
 
   async function handleSignOut() {
     await signOut();
@@ -42,12 +44,24 @@ export default function SettingsScreen() {
     }
   }
 
-  function handleDowngrade(targetPlan: Plan) {
-    // TODO [CHALLENGE]: Implement downgrade with seat conflict detection (Scenario 2)
-    // Before calling Stripe, check if active seats > targetPlan's seat limit.
-    // If conflict: show modal asking user to deactivate excess staff OR queue for end of cycle.
-    // Document your chosen strategy in DECISIONS.md.
-    Alert.alert('TODO', `Implement downgrade to ${targetPlan} — see Scenario 2`);
+  async function handleDowngrade(targetPlan: Plan) {
+    if (!clinic || isDowngrading) return;
+    setIsDowngrading(true);
+    setDowngradeMessage(null);
+    try {
+      await initiateDowngrade({ clinicId: clinic.id, targetPlan: targetPlan as 'free' | 'pro' | 'premium' });
+      setDowngradeMessage({ type: 'success', text: `Downgraded to ${targetPlan}. Firestore will update shortly.` });
+    } catch (err: unknown) {
+      const raw = (err as { message?: string })?.message ?? '';
+      console.error('[handleDowngrade] error:', err);
+      if (raw.toLowerCase().includes('seat')) {
+        setDowngradeMessage({ type: 'conflict', text: raw + '\n\nRemove staff members first, then try again.' });
+      } else {
+        setDowngradeMessage({ type: 'error', text: raw || 'Could not downgrade plan. Check console for details.' });
+      }
+    } finally {
+      setIsDowngrading(false);
+    }
   }
 
   return (
@@ -109,14 +123,25 @@ export default function SettingsScreen() {
           {plan !== 'free' && (
             <>
               <Text style={[styles.subTitle, { marginTop: 16 }]}>Downgrade to</Text>
+              {downgradeMessage && (
+                <View style={[
+                  styles.messageBanner,
+                  downgradeMessage.type === 'success' && styles.messageBannerSuccess,
+                  downgradeMessage.type === 'conflict' && styles.messageBannerConflict,
+                  downgradeMessage.type === 'error' && styles.messageBannerError,
+                ]}>
+                  <Text style={styles.messageBannerText}>{downgradeMessage.text}</Text>
+                </View>
+              )}
               {DOWNGRADE_OPTIONS.filter((p) => {
                 const planOrder: Plan[] = ['free', 'pro', 'premium', 'vip'];
                 return planOrder.indexOf(p) < planOrder.indexOf(plan);
               }).map((targetPlan) => (
                 <TouchableOpacity
                   key={targetPlan}
-                  style={[styles.planButton, styles.planButtonDowngrade]}
+                  style={[styles.planButton, styles.planButtonDowngrade, isDowngrading && { opacity: 0.5 }]}
                   onPress={() => handleDowngrade(targetPlan)}
+                  disabled={isDowngrading}
                 >
                   <View>
                     <Text style={styles.planButtonName}>{PLAN_CONFIG[targetPlan].label}</Text>
@@ -181,6 +206,11 @@ const styles = StyleSheet.create({
   planButtonPrice: { fontSize: 12, color: '#6b7280', marginTop: 2 },
   planButtonAction: { fontSize: 14, fontWeight: '700', color: '#3b82f6' },
   downgradeText: { color: '#9ca3af' },
+  messageBanner: { borderRadius: 8, padding: 12, marginTop: 8, marginBottom: 4 },
+  messageBannerSuccess: { backgroundColor: '#dcfce7' },
+  messageBannerConflict: { backgroundColor: '#fef9c3' },
+  messageBannerError: { backgroundColor: '#fee2e2' },
+  messageBannerText: { fontSize: 13, color: '#111827', lineHeight: 18 },
   signOutButton: {
     backgroundColor: '#fee2e2',
     borderRadius: 10,

@@ -76,12 +76,8 @@ export const handleStripeWebhook = functions.https.onRequest(async (req, res) =>
       }
 
       case 'customer.subscription.deleted': {
-        // TODO [CHALLENGE]: Handle subscription cancellation.
-        // Revert plan to 'free', status to 'canceled'.
-        // Deactivate seats exceeding free plan limit (1 seat).
-        // Owner keeps their seat; excess staff are deactivated.
         const sub = event.data.object as Stripe.Subscription;
-        console.log('TODO [CHALLENGE]: Handle subscription deleted for', sub.id);
+        await handleSubscriptionDeleted(db, sub);
         break;
       }
 
@@ -138,7 +134,6 @@ async function handleSubscriptionUpdated(
   db: admin.firestore.Firestore,
   stripeSubscription: Stripe.Subscription,
 ): Promise<void> {
-  // Find clinic by stripeSubscriptionId
   const snap = await db
     .collection('subscriptions')
     .where('stripeSubscriptionId', '==', stripeSubscription.id)
@@ -153,10 +148,88 @@ async function handleSubscriptionUpdated(
   const subDoc = snap.docs[0];
   const clinicId = subDoc.id;
 
-  // Stripe stores the current plan in the subscription items
-  // TODO [CHALLENGE]: Parse the plan from stripeSubscription.items to determine the new plan
-  // and update Firestore accordingly. This is called on upgrades and downgrades.
-  console.log('TODO [CHALLENGE]: Sync subscription update for clinic', clinicId);
+  // Map the active price ID back to a plan name using environment variables
+  const priceId = stripeSubscription.items.data[0]?.price.id;
+  if (!priceId) {
+    console.warn('No price found on subscription', stripeSubscription.id);
+    return;
+  }
+
+  const priceToplan: Record<string, 'pro' | 'premium' | 'vip'> = {
+    [process.env.STRIPE_PRICE_PRO!]: 'pro',
+    [process.env.STRIPE_PRICE_PREMIUM!]: 'premium',
+    [process.env.STRIPE_PRICE_VIP!]: 'vip',
+  };
+
+  const newPlan = priceToplan[priceId];
+  if (!newPlan) {
+    console.warn('Unrecognized price ID on subscription update:', priceId);
+    return;
+  }
+
+  const { PLAN_CONFIG_SERVER } = await import('./planConfig');
+  const planConfig = PLAN_CONFIG_SERVER[newPlan];
+  const clinicRef = db.collection('clinics').doc(clinicId);
+
+  await db.runTransaction(async (tx) => {
+    tx.update(subDoc.ref, { plan: newPlan });
+    tx.update(clinicRef, {
+      plan: newPlan,
+      'seats.max': planConfig.seats,
+    });
+  });
+}
+
+async function handleSubscriptionDeleted(
+  db: admin.firestore.Firestore,
+  stripeSubscription: Stripe.Subscription,
+): Promise<void> {
+  const snap = await db
+    .collection('subscriptions')
+    .where('stripeSubscriptionId', '==', stripeSubscription.id)
+    .limit(1)
+    .get();
+
+  if (snap.empty) {
+    console.warn('No clinic found for deleted subscription', stripeSubscription.id);
+    return;
+  }
+
+  const subDoc = snap.docs[0];
+  const clinicId = subDoc.id;
+
+  // Query all active staff seats (owner keeps their seat)
+  const staffSeatsSnap = await db
+    .collection('seats')
+    .doc(clinicId)
+    .collection('members')
+    .where('active', '==', true)
+    .where('role', '==', 'staff')
+    .get();
+
+  const clinicRef = db.collection('clinics').doc(clinicId);
+
+  await db.runTransaction(async (tx) => {
+    // Revert subscription to free / canceled
+    tx.update(subDoc.ref, {
+      plan: 'free',
+      status: 'canceled',
+      stripeSubscriptionId: null,
+      gracePeriodEnd: null,
+    });
+
+    // Mirror on clinic
+    tx.update(clinicRef, {
+      plan: 'free',
+      'seats.max': 1,
+      'seats.used': 0,
+    });
+
+    // Deactivate all staff seats — owner keeps theirs
+    for (const seatDoc of staffSeatsSnap.docs) {
+      tx.update(seatDoc.ref, { active: false });
+    }
+  });
 }
 
 async function handlePaymentSucceeded(

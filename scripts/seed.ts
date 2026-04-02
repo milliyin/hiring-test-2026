@@ -17,7 +17,7 @@
 import { initializeApp } from 'firebase/app';
 import {
   getFirestore, connectFirestoreEmulator,
-  collection, doc, setDoc, Timestamp,
+  doc, setDoc, Timestamp,
 } from 'firebase/firestore';
 import {
   getAuth, connectAuthEmulator,
@@ -146,6 +146,9 @@ async function seed() {
   });
   console.log('  ✓ Discount: ADDONS15 — 15% off all add-ons (EXPIRED — for Scenario 5)');
 
+  // Sign in as owner for all remaining writes (rules now require authenticated owner)
+  await signInWithEmailAndPassword(auth, 'sophie.owner@test.com', 'test1234');
+
   // Seats
   console.log('\nCreating seats...');
   await setDoc(doc(db, 'seats', CLINIC_ID, 'members', ownerId), {
@@ -167,7 +170,6 @@ async function seed() {
 
   // Appointments
   console.log('\nCreating appointments...');
-  await signInWithEmailAndPassword(auth, 'sophie.owner@test.com', 'test1234');
   const makeDate = (daysFromNow: number, hour: number) => {
     const d = new Date();
     d.setDate(d.getDate() + daysFromNow);

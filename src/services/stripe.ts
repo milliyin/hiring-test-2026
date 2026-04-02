@@ -75,15 +75,16 @@ export type DowngradeResult = {
   effectiveDate?: string; // ISO date if queued
 };
 
-// TODO [CHALLENGE]: Implement plan downgrade (Scenario 2).
-// This is the hard one. Before calling Stripe, the Cloud Function must:
-//   1. Check current active seat count against target plan's seat limit
-//   2. If conflict: decide between immediate block or queue-for-end-of-cycle
-//   3. Document your chosen strategy in DECISIONS.md
-//   4. If queued: set a flag in Firestore, enforce in rules until resolved
-//   5. Firestore rules must block new seat additions during the downgrade-pending state
 export async function initiateDowngrade(
-  _params: DowngradeParams,
+  params: DowngradeParams,
 ): Promise<DowngradeResult> {
-  throw new Error('TODO [CHALLENGE]: Implement initiateDowngrade');
+  if (Platform.OS === 'web') {
+    const { httpsCallable } = functionsModule;
+    const fn = httpsCallable(functions, 'initiateDowngrade');
+    const result = await fn(params);
+    return result.data as DowngradeResult;
+  } else {
+    const result = await functions().httpsCallable('initiateDowngrade')(params);
+    return result.data as DowngradeResult;
+  }
 }

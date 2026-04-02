@@ -121,24 +121,63 @@ export const initiateDowngrade = functions.https.onCall(async (request) => {
     targetPlan: 'free' | 'pro' | 'premium';
   };
 
-  // TODO [CHALLENGE]: Implement downgrade with seat conflict handling (Scenario 2).
-  // This is the core design challenge. Your approach:
-  //
-  // 1. Count active seats: query seats/{clinicId}/members where active == true
-  // 2. Get target plan's seat limit from PLAN_CONFIG
-  // 3. If activeSeats <= targetSeatLimit: proceed with immediate downgrade
-  //    - Update Stripe subscription to new price
-  //    - Let webhook handle Firestore update
-  // 4. If activeSeats > targetSeatLimit: SEAT CONFLICT
-  //    - Option A: Block downgrade, return conflict info, require owner to deactivate staff first
-  //    - Option B: Queue downgrade for end of billing period, show warning in UI
-  //    - Pick one. Document your reasoning in DECISIONS.md.
-  //    - Whichever you choose: Firestore rules must enforce the pending state
-  //      (e.g., no new staff can join while downgrade is queued)
-  //
-  // Return DowngradeResult (see stripe.ts type) so the UI can show appropriate state.
-  console.log('TODO [CHALLENGE]: Implement initiateDowngrade to', targetPlan, 'for clinic', clinicId);
-  throw new functions.https.HttpsError('unimplemented', 'TODO [CHALLENGE]: Implement initiateDowngrade');
+  const db = admin.firestore();
+
+  // Verify caller is the clinic owner
+  const userDoc = await db.collection('users').doc(request.auth.uid).get();
+  const user = userDoc.data();
+  if (!user || user.role !== 'owner' || user.clinicId !== clinicId) {
+    throw new functions.https.HttpsError('permission-denied', 'Only clinic owners can manage billing');
+  }
+
+  const { PLAN_CONFIG_SERVER } = await import('./planConfig');
+  const targetConfig = PLAN_CONFIG_SERVER[targetPlan];
+  const seatLimit = targetConfig.seats === Infinity ? Number.MAX_SAFE_INTEGER : (targetConfig.seats as number);
+
+  // Count active seats (staff only — owner seat is not counted in seats.used)
+  const seatsSnap = await db
+    .collection('seats')
+    .doc(clinicId)
+    .collection('members')
+    .where('active', '==', true)
+    .where('role', '==', 'staff')
+    .get();
+
+  const activeStaff = seatsSnap.size;
+
+  if (activeStaff > seatLimit) {
+    // Block: owner must deactivate excess staff first (see DECISIONS.md)
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      `Seat conflict: ${activeStaff} active staff exceed ${targetPlan} plan limit of ${targetConfig.seats}. ` +
+        `Deactivate ${activeStaff - (targetConfig.seats as number)} staff member(s) before downgrading.`,
+      { conflictingSeats: activeStaff - (targetConfig.seats as number), activeStaff, seatLimit: targetConfig.seats },
+    );
+  }
+
+  // No conflict — proceed with downgrade
+  const subDoc = await db.collection('subscriptions').doc(clinicId).get();
+  const sub = subDoc.data();
+  if (!sub?.stripeSubscriptionId) {
+    throw new functions.https.HttpsError('not-found', 'No active Stripe subscription found');
+  }
+
+  if (targetPlan === 'free') {
+    // Cancel subscription outright — customer.subscription.deleted webhook handles Firestore
+    await getStripe().subscriptions.cancel(sub.stripeSubscriptionId);
+  } else {
+    // Swap the subscription item to the new price — customer.subscription.updated webhook handles Firestore
+    const subscription = await getStripe().subscriptions.retrieve(sub.stripeSubscriptionId);
+    const itemId = subscription.items.data[0]?.id;
+    if (!itemId) throw new functions.https.HttpsError('internal', 'Subscription has no items');
+
+    await getStripe().subscriptions.update(sub.stripeSubscriptionId, {
+      items: [{ id: itemId, price: getPriceId(targetPlan) }],
+      proration_behavior: 'none',
+    });
+  }
+
+  return { strategy: 'immediate' };
 });
 
 /**
