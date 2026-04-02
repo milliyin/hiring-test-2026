@@ -12,19 +12,15 @@ export default function LoginScreen() {
   const [isLoading, setIsLoading] = useState(false);
 
   async function handleLogin() {
-    alert('Login pressed'); // Debug alert
     if (!email || !password) {
-      Alert.alert('Missing fields', 'Please enter your email and password.');
       return;
     }
     setIsLoading(true);
     try {
       await signIn(email, password);
       router.replace('/(app)/appointments');
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Login failed. Check your credentials.';
-      alert('Login failed: ' + message); // Use alert for web
-      Alert.alert('Login failed', message);
+    } catch (_error: unknown) {
+      // Intentionally silent to avoid popup notifications
     } finally {
       setIsLoading(false);
     }

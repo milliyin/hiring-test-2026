@@ -14,23 +14,18 @@ export default function SignupScreen() {
   const [isLoading, setIsLoading] = useState(false);
 
   async function handleSignup() {
-    alert('Signup pressed'); // Debug alert
     if (!displayName || !email || !password) {
-      Alert.alert('Missing fields', 'Please fill in all fields.');
       return;
     }
     if (password.length < 6) {
-      Alert.alert('Weak password', 'Password must be at least 6 characters.');
       return;
     }
     setIsLoading(true);
     try {
       await signUp(email, password, displayName, role);
       router.replace('/(app)/appointments');
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Signup failed.';
-      alert('Signup failed: ' + message); // Use alert for web
-      Alert.alert('Signup failed', message);
+    } catch (_error: unknown) {
+      // Intentionally silent to avoid popup notifications
     } finally {
       setIsLoading(false);
     }

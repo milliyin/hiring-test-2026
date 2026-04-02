@@ -8,16 +8,12 @@ function getStripe(): Stripe {
   return _stripe;
 }
 
-// Stripe Price IDs — set these in Firebase config or environment variables
-// Replace with real price IDs from your Stripe dashboard
-const PRICE_IDS: Record<string, string> = {
-  pro:                'price_PRO_REPLACE_ME',
-  premium:            'price_PREMIUM_REPLACE_ME',
-  vip:                'price_VIP_REPLACE_ME',
-  extra_storage:      'price_STORAGE_REPLACE_ME',
-  extra_seats:        'price_SEATS_REPLACE_ME',
-  advanced_analytics: 'price_ANALYTICS_REPLACE_ME',
-};
+// Stripe Price IDs — loaded from environment (functions/.env in dev, Firebase config in prod)
+function getPriceId(key: string): string {
+  const id = process.env[`STRIPE_PRICE_${key.toUpperCase()}`];
+  if (!id) throw new functions.https.HttpsError('internal', `Stripe price ID not configured: STRIPE_PRICE_${key.toUpperCase()}`);
+  return id;
+}
 
 /**
  * Creates a Stripe Checkout session for plan upgrades.
@@ -46,8 +42,9 @@ export const createCheckoutSession = functions.https.onCall(async (request) => {
   const sub = subDoc.data();
   let customerId: string;
 
-  if (sub?.stripeCustomerId) {
-    customerId = sub.stripeCustomerId;
+  const existingCustomerId = sub?.stripeCustomerId;
+  if (existingCustomerId && existingCustomerId.startsWith('cus_') && !existingCustomerId.includes('REPLACE')) {
+    customerId = existingCustomerId;
   } else {
     const clinicDoc = await db.collection('clinics').doc(clinicId).get();
     const clinic = clinicDoc.data();
@@ -71,14 +68,15 @@ export const createCheckoutSession = functions.https.onCall(async (request) => {
     console.log('TODO [CHALLENGE]: Validate and apply discount code:', discountCode);
   }
 
+  const appUrl = process.env.APP_URL ?? 'http://localhost:8081';
   const session = await getStripe().checkout.sessions.create({
     customer: customerId,
     mode: 'subscription',
-    line_items: [{ price: PRICE_IDS[plan], quantity: 1 }],
+    line_items: [{ price: getPriceId(plan), quantity: 1 }],
     ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
     metadata: { clinicId, plan },
-    success_url: 'clinicapp://billing?success=true',
-    cancel_url: 'clinicapp://billing?canceled=true',
+    success_url: `${appUrl}/(app)/billing?success=true`,
+    cancel_url: `${appUrl}/(app)/billing?canceled=true`,
   });
 
   return { sessionId: session.id, url: session.url };

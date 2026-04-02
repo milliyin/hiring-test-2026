@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert,
 } from 'react-native';
+import { router } from 'expo-router';
 import { useAuth } from '@/hooks/useAuth';
 import { useClinic } from '@/hooks/useClinic';
 import { useSubscription } from '@/hooks/useSubscription';
@@ -35,10 +36,7 @@ export default function BillingScreen() {
   }
 
   function handleUpgrade() {
-    // TODO [CHALLENGE]: Open Stripe Checkout via createCheckoutSession (stripe.ts)
-    // Navigate to a plan selection screen, then call createCheckoutSession.
-    // After checkout, Stripe webhook → Cloud Function → Firestore update.
-    Alert.alert('TODO', 'Implement Stripe Checkout (Scenario 1)');
+    router.push('/(app)/settings');
   }
 
   function handlePurchaseAddon(addonType: string) {

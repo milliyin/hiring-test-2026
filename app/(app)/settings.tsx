@@ -1,12 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert,
+  View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert, Linking,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/hooks/useAuth';
 import { useClinic } from '@/hooks/useClinic';
 import { useSubscription } from '@/hooks/useSubscription';
 import { signOut } from '@/services/auth';
+import { createCheckoutSession } from '@/services/stripe';
 import { PlanBadge } from '@/components/PlanBadge';
 import { PLAN_CONFIG } from '@/types/subscription';
 import type { Plan } from '@/types/subscription';
@@ -18,15 +19,27 @@ export default function SettingsScreen() {
   const { profile } = useAuth();
   const { clinic } = useClinic();
   const { plan, status } = useSubscription();
+  const [isUpgrading, setIsUpgrading] = useState(false);
 
   async function handleSignOut() {
     await signOut();
     router.replace('/(auth)/login');
   }
 
-  function handleUpgrade(targetPlan: Plan) {
-    // TODO [CHALLENGE]: Navigate to Stripe Checkout for upgrade (Scenario 1)
-    Alert.alert('TODO', `Implement upgrade to ${targetPlan}`);
+  async function handleUpgrade(targetPlan: Plan) {
+    if (!clinic || isUpgrading) return;
+    setIsUpgrading(true);
+    try {
+      const { url } = await createCheckoutSession({
+        clinicId: clinic.id,
+        plan: targetPlan as 'pro' | 'premium' | 'vip',
+      });
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('Error', 'Could not start checkout. Please try again.');
+    } finally {
+      setIsUpgrading(false);
+    }
   }
 
   function handleDowngrade(targetPlan: Plan) {
@@ -79,8 +92,9 @@ export default function SettingsScreen() {
           }).map((targetPlan) => (
             <TouchableOpacity
               key={targetPlan}
-              style={styles.planButton}
+              style={[styles.planButton, isUpgrading && { opacity: 0.5 }]}
               onPress={() => handleUpgrade(targetPlan)}
+              disabled={isUpgrading}
             >
               <View>
                 <Text style={styles.planButtonName}>{PLAN_CONFIG[targetPlan].label}</Text>

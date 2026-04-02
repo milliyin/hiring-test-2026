@@ -1,5 +1,6 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
+import { Timestamp } from 'firebase-admin/firestore';
 import Stripe from 'stripe';
 
 let _stripe: Stripe | null = null;
@@ -119,7 +120,7 @@ async function handleCheckoutCompleted(
       status: 'active',
       stripeCustomerId: session.customer,
       stripeSubscriptionId: session.subscription,
-      currentPeriodEnd: admin.firestore.Timestamp.fromDate(
+      currentPeriodEnd: Timestamp.fromDate(
         new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // ~1 month
       ),
       gracePeriodEnd: null,

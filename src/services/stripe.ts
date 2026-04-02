@@ -12,8 +12,12 @@ const functions = Platform.OS === 'web' ? functionsModule.getFunctions(firebaseA
 const USE_EMULATOR = process.env.EXPO_PUBLIC_USE_EMULATOR === 'true';
 const EMULATOR_HOST = process.env.EXPO_PUBLIC_EMULATOR_HOST ?? 'localhost';
 
-if (USE_EMULATOR && Platform.OS !== 'web') {
-  functions().useEmulator(EMULATOR_HOST, 5001);
+if (USE_EMULATOR) {
+  if (Platform.OS === 'web') {
+    functionsModule.connectFunctionsEmulator(functions, EMULATOR_HOST, 5001);
+  } else {
+    functions().useEmulator(EMULATOR_HOST, 5001);
+  }
 }
 
 export type CreateCheckoutParams = {
@@ -27,18 +31,18 @@ export type CheckoutResult = {
   url: string;
 };
 
-// TODO [CHALLENGE]: Implement Stripe Checkout session creation (Scenario 1 & 2).
-// This calls the createCheckoutSession Cloud Function, which:
-//   1. Creates or retrieves a Stripe Customer for this clinic
-//   2. Creates a Checkout Session with the correct price ID
-//   3. Applies any valid discount codes (validate expiry server-side — don't trust client)
-//   4. Returns the session URL for redirect
-//
-// The Cloud Function stub is at functions/src/stripe/checkout.ts
 export async function createCheckoutSession(
-  _params: CreateCheckoutParams,
+  params: CreateCheckoutParams,
 ): Promise<CheckoutResult> {
-  throw new Error('TODO [CHALLENGE]: Implement createCheckoutSession');
+  if (Platform.OS === 'web') {
+    const { httpsCallable } = functionsModule;
+    const fn = httpsCallable(functions, 'createCheckoutSession');
+    const result = await fn(params);
+    return result.data as CheckoutResult;
+  } else {
+    const result = await functions().httpsCallable('createCheckoutSession')(params);
+    return result.data as CheckoutResult;
+  }
 }
 
 export type AddonPurchaseParams = {

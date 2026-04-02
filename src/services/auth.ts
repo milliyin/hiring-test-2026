@@ -9,25 +9,12 @@ const firestore = Platform.OS === 'web' ? firestoreModule.getFirestore(firebaseA
 
 import type { User } from '@/types/user';
 
-const USE_EMULATOR = process.env.EXPO_PUBLIC_USE_EMULATOR === 'true';
-const EMULATOR_HOST = process.env.EXPO_PUBLIC_EMULATOR_HOST ?? 'localhost';
-
-if (USE_EMULATOR) {
-  if (Platform.OS === 'web') {
-    const { connectAuthEmulator } = authModule;
-    connectAuthEmulator(auth, `http://${EMULATOR_HOST}:9099`);
-  } else {
-    auth().useEmulator(`http://${EMULATOR_HOST}:9099`);
-  }
-}
-
 export async function signUp(
   email: string,
   password: string,
   displayName: string,
   role: 'owner' | 'patient' = 'patient',
 ): Promise<void> {
-  alert('Starting signup for ' + email);
   let credential;
   if (Platform.OS === 'web') {
     credential = await authModule.createUserWithEmailAndPassword(auth, email, password);
@@ -46,18 +33,20 @@ export async function signUp(
     createdAt: Platform.OS === 'web' ? firestoreModule.Timestamp.now() : firestore.Timestamp.now(),
   };
 
-  await firestore.collection('users').doc(credential.user.uid).set(userData);
-  alert('Signup successful');
+  if (Platform.OS === 'web') {
+    const { doc, setDoc } = firestoreModule;
+    await setDoc(doc(firestore, 'users', credential.user.uid), userData);
+  } else {
+    await firestore.collection('users').doc(credential.user.uid).set(userData);
+  }
 }
 
 export async function signIn(email: string, password: string): Promise<void> {
-  alert('Starting sign in for ' + email);
   if (Platform.OS === 'web') {
     await authModule.signInWithEmailAndPassword(auth, email, password);
   } else {
     await auth().signInWithEmailAndPassword(email, password);
   }
-  alert('Sign in successful');
 }
 
 export async function signOut(): Promise<void> {

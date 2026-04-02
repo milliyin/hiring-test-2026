@@ -1,19 +1,24 @@
 import { create } from 'zustand';
 import { Platform } from 'react-native';
 import { firebaseApp } from '@/services/firebase';
+import { getUser } from '@/services/firestore';
+import type { User } from '@/types/user';
 
 const authModule = Platform.OS === 'web' ? require('firebase/auth') : require('@react-native-firebase/auth');
 const auth = Platform.OS === 'web' ? authModule.getAuth(firebaseApp) : authModule.default;
 
-import { getUser } from '@/services/firestore';
-import type { User } from '@/types/user';
-
+// Connect emulator here — before initAuthListener — so onAuthStateChanged never fires on a
+// non-emulated instance. Moving this to auth.ts is too late: auth.ts loads lazily (only when
+// the login screen mounts), which is after the listener is already registered.
 const USE_EMULATOR = process.env.EXPO_PUBLIC_USE_EMULATOR === 'true';
 const EMULATOR_HOST = process.env.EXPO_PUBLIC_EMULATOR_HOST ?? 'localhost';
 
-if (USE_EMULATOR && Platform.OS === 'web') {
-  const { connectAuthEmulator } = authModule;
-  connectAuthEmulator(auth, `http://${EMULATOR_HOST}:9099`);
+if (USE_EMULATOR) {
+  if (Platform.OS === 'web') {
+    authModule.connectAuthEmulator(auth, `http://${EMULATOR_HOST}:9099`, { disableWarnings: true });
+  } else {
+    auth().useEmulator(`http://${EMULATOR_HOST}:9099`);
+  }
 }
 
 type AuthState = {
