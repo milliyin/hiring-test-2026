@@ -4,12 +4,22 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // Helper functions
+
     function isAuthenticated() {
       return request.auth != null;
     }
 
+    // Safe user data fetch — returns null if the doc doesn't exist yet.
+    // Guards against the race condition where Firebase Auth fires before the
+    // users/{uid} doc has been committed (e.g. immediately after signup).
+    function getUserData() {
+      let ref = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(ref) ? get(ref).data : null;
+    }
+
     function getUserRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+      let data = getUserData();
+      return data != null ? data.role : null;
     }
 
     function isOwner() {
@@ -21,30 +31,33 @@ service cloud.firestore {
     }
 
     function belongsToClinic(clinicId) {
-      return isAuthenticated() &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.clinicId == clinicId;
+      let data = isAuthenticated() ? getUserData() : null;
+      return data != null && data.clinicId == clinicId;
+    }
+
+    // Safe subscription fetch — returns null if the doc doesn't exist yet.
+    function getSubscription(clinicId) {
+      let ref = /databases/$(database)/documents/subscriptions/$(clinicId);
+      return exists(ref) ? get(ref).data : null;
     }
 
     function getClinicPlan(clinicId) {
-      return get(/databases/$(database)/documents/subscriptions/$(clinicId)).data.plan;
-    }
-
-    // Returns the raw subscription document data for a clinic.
-    function getSubscription(clinicId) {
-      return get(/databases/$(database)/documents/subscriptions/$(clinicId)).data;
+      let sub = getSubscription(clinicId);
+      return sub != null ? sub.plan : 'free';
     }
 
     // True when the clinic's subscription is in a state where existing features
     // remain accessible (active OR within the 7-day grace period after payment failure).
     function clinicIsActive(clinicId) {
-      let status = getSubscription(clinicId).status;
-      return status == 'active' || status == 'grace_period';
+      let sub = getSubscription(clinicId);
+      return sub != null && (sub.status == 'active' || sub.status == 'grace_period');
     }
 
     // True ONLY when the subscription is fully active — not in grace period.
     // Used to block new staff additions during payment failure (Scenario 4).
     function clinicIsFullyActive(clinicId) {
-      return getSubscription(clinicId).status == 'active';
+      let sub = getSubscription(clinicId);
+      return sub != null && sub.status == 'active';
     }
 
     // Clinics collection

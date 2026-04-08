@@ -19,8 +19,9 @@ export default function LoginScreen() {
     try {
       await signIn(email, password);
       router.replace('/(app)/appointments');
-    } catch (_error: unknown) {
-      // Intentionally silent to avoid popup notifications
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message ?? 'Invalid email or password.';
+      Alert.alert('Sign in failed', msg);
     } finally {
       setIsLoading(false);
     }
@@ -43,6 +44,8 @@ export default function LoginScreen() {
           autoCapitalize="none"
           keyboardType="email-address"
           autoComplete="email"
+          returnKeyType="next"
+          blurOnSubmit={false}
         />
         <TextInput
           style={styles.input}
@@ -51,25 +54,29 @@ export default function LoginScreen() {
           onChangeText={setPassword}
           secureTextEntry
           autoComplete="password"
+          returnKeyType="go"
+          onSubmitEditing={handleLogin}
         />
 
         {Platform.OS === 'web' ? (
-          <button
-            style={{
-              backgroundColor: '#3b82f6',
-              borderRadius: 8,
-              padding: 16,
-              alignItems: 'center',
-              marginTop: 4,
-              border: 'none',
-              cursor: 'pointer',
-              opacity: isLoading ? 0.6 : 1,
-            }}
-            onClick={handleLogin}
-            disabled={isLoading}
-          >
-            <Text style={styles.buttonText}>{isLoading ? 'Signing in…' : 'Sign in'}</Text>
-          </button>
+          <form onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
+            <button
+              type="submit"
+              style={{
+                width: '100%',
+                backgroundColor: '#3b82f6',
+                borderRadius: 8,
+                padding: 16,
+                marginTop: 4,
+                border: 'none',
+                cursor: 'pointer',
+                opacity: isLoading ? 0.6 : 1,
+              }}
+              disabled={isLoading}
+            >
+              <Text style={styles.buttonText}>{isLoading ? 'Signing in…' : 'Sign in'}</Text>
+            </button>
+          </form>
         ) : (
           <TouchableOpacity
             style={[styles.button, isLoading && styles.buttonDisabled]}
