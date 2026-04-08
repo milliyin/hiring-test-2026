@@ -8,3 +8,9 @@ export const PLAN_CONFIG_SERVER = {
 } as const;
 
 export const ADDON_SEATS_BONUS = 5; // Extra Seats Pack adds 5 seats per purchase
+
+export const ADDON_CONFIG_SERVER = {
+  extra_storage:      { price: 19 },
+  extra_seats:        { price: 49 },
+  advanced_analytics: { price: 79 },
+} as const;

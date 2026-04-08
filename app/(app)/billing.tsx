@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert,
+  View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/hooks/useAuth';
 import { useClinic } from '@/hooks/useClinic';
 import { useSubscription } from '@/hooks/useSubscription';
 import { getClinicAddons, getClinicDiscounts } from '@/services/firestore';
+import { purchaseAddon } from '@/services/stripe';
 import { PlanBadge } from '@/components/PlanBadge';
 import { SeatUsageBar } from '@/components/SeatUsageBar';
 import { DiscountTag } from '@/components/DiscountTag';
@@ -20,6 +21,10 @@ export default function BillingScreen() {
   const { plan, status, config, seatsUsed, seatsMax } = useSubscription();
   const [addons, setAddons] = useState<Addon[]>([]);
   const [discounts, setDiscounts] = useState<Discount[]>([]);
+  const [pendingAddon, setPendingAddon] = useState<string | null>(null);
+  const [discountCode, setDiscountCode] = useState('');
+  const [isPurchasing, setIsPurchasing] = useState(false);
+  const [addonMessage, setAddonMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
   useEffect(() => {
     if (!clinic) return;
@@ -40,9 +45,33 @@ export default function BillingScreen() {
   }
 
   function handlePurchaseAddon(addonType: string) {
-    // TODO [CHALLENGE]: Call purchaseAddon from stripe.ts
-    // Remember: validate applicable discounts server-side (Scenario 3)
-    Alert.alert('TODO', `Implement add-on purchase for ${addonType} (Scenario 3)`);
+    setPendingAddon(addonType);
+    setDiscountCode('');
+    setAddonMessage(null);
+  }
+
+  async function confirmPurchase() {
+    if (!clinic || !pendingAddon || isPurchasing) return;
+    setIsPurchasing(true);
+    setAddonMessage(null);
+    try {
+      await purchaseAddon({
+        clinicId: clinic.id,
+        addonType: pendingAddon as 'extra_storage' | 'extra_seats' | 'advanced_analytics',
+        discountCode: discountCode.trim() || undefined,
+      });
+      setAddonMessage({ type: 'success', text: `Add-on purchased successfully.` });
+      setPendingAddon(null);
+      setDiscountCode('');
+      // Refresh add-on list
+      getClinicAddons(clinic.id).then(setAddons);
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message ?? 'Could not purchase add-on.';
+      console.error('[confirmPurchase]', err);
+      setAddonMessage({ type: 'error', text: msg });
+    } finally {
+      setIsPurchasing(false);
+    }
   }
 
   return (
@@ -121,6 +150,50 @@ export default function BillingScreen() {
         {plan === 'free' && (
           <Text style={styles.empty}>Upgrade to a paid plan to add add-ons.</Text>
         )}
+
+        {/* Inline purchase panel — shown when user taps "Add" on an add-on */}
+        {pendingAddon && (
+          <View style={styles.purchasePanel}>
+            <Text style={styles.purchasePanelTitle}>
+              Purchase {ADDON_CONFIG[pendingAddon as keyof typeof ADDON_CONFIG]?.label}
+            </Text>
+            <TextInput
+              style={styles.discountInput}
+              placeholder="Discount code (optional)"
+              value={discountCode}
+              onChangeText={setDiscountCode}
+              autoCapitalize="characters"
+              editable={!isPurchasing}
+            />
+            <View style={styles.purchasePanelButtons}>
+              <TouchableOpacity
+                style={[styles.confirmButton, isPurchasing && { opacity: 0.5 }]}
+                onPress={confirmPurchase}
+                disabled={isPurchasing}
+              >
+                <Text style={styles.confirmButtonText}>
+                  {isPurchasing ? 'Processing...' : 'Confirm purchase'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => { setPendingAddon(null); setAddonMessage(null); }}
+                disabled={isPurchasing}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {addonMessage && (
+          <View style={[
+            styles.addonMessageBanner,
+            addonMessage.type === 'success' ? styles.addonMessageSuccess : styles.addonMessageError,
+          ]}>
+            <Text style={styles.addonMessageText}>{addonMessage.text}</Text>
+          </View>
+        )}
       </View>
 
       {/* Active discounts */}
@@ -189,6 +262,18 @@ const styles = StyleSheet.create({
   addonPrice: { fontSize: 14, fontWeight: '700', color: '#111827' },
   addButton: { fontSize: 13, color: '#3b82f6', fontWeight: '600' },
   empty: { fontSize: 14, color: '#9ca3af' },
+  purchasePanel: { marginTop: 12, padding: 12, borderWidth: 1, borderColor: '#d1fae5', borderRadius: 8, backgroundColor: '#f0fdf4' },
+  purchasePanelTitle: { fontSize: 14, fontWeight: '700', color: '#111827', marginBottom: 8 },
+  discountInput: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 6, padding: 8, fontSize: 14, backgroundColor: '#fff', marginBottom: 8 },
+  purchasePanelButtons: { flexDirection: 'row', gap: 8 },
+  confirmButton: { flex: 1, backgroundColor: '#3b82f6', borderRadius: 6, padding: 10, alignItems: 'center' },
+  confirmButtonText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  cancelButton: { flex: 1, backgroundColor: '#e5e7eb', borderRadius: 6, padding: 10, alignItems: 'center' },
+  cancelButtonText: { color: '#374151', fontWeight: '600', fontSize: 13 },
+  addonMessageBanner: { marginTop: 8, padding: 10, borderRadius: 6 },
+  addonMessageSuccess: { backgroundColor: '#dcfce7' },
+  addonMessageError: { backgroundColor: '#fee2e2' },
+  addonMessageText: { fontSize: 13, color: '#111827', lineHeight: 18 },
   upgradeButton: {
     backgroundColor: '#3b82f6',
     borderRadius: 10,

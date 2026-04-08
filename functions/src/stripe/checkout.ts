@@ -1,5 +1,6 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
 import Stripe from 'stripe';
 
 let _stripe: Stripe | null = null;
@@ -94,20 +95,131 @@ export const purchaseAddon = functions.https.onCall(async (request) => {
     discountCode?: string;
   };
 
-  // TODO [CHALLENGE]: Implement add-on purchase (Scenario 3).
-  // Steps:
-  //   1. Verify caller is owner of clinicId
-  //   2. Look up the clinic's active Stripe subscription
-  //   3. Add a new subscription item for the add-on price
-  //   4. If discountCode provided:
-  //      a. Fetch discount from Firestore
-  //      b. Check appliesToAddons — does it include this addonType or 'all'?
-  //      c. IMPORTANT: A discount that applies to base plan only must NOT apply here
-  //      d. Apply applicable discount to the subscription item
-  //   5. On success, write addon record to addons/{clinicId}/items/{addonId}
-  //   6. Update clinic.addons array
-  console.log('TODO [CHALLENGE]: Implement purchaseAddon for', addonType, 'clinic', clinicId, discountCode);
-  throw new functions.https.HttpsError('unimplemented', 'TODO [CHALLENGE]: Implement purchaseAddon');
+  const db = admin.firestore();
+
+  // Verify caller is the clinic owner
+  const userDoc = await db.collection('users').doc(request.auth.uid).get();
+  const user = userDoc.data();
+  if (!user || user.role !== 'owner' || user.clinicId !== clinicId) {
+    throw new functions.https.HttpsError('permission-denied', 'Only clinic owners can purchase add-ons');
+  }
+
+  // Check add-on not already active for this clinic
+  const existingSnap = await db
+    .collection('addons').doc(clinicId).collection('items')
+    .where('type', '==', addonType)
+    .where('active', '==', true)
+    .limit(1)
+    .get();
+  if (!existingSnap.empty) {
+    throw new functions.https.HttpsError('already-exists', `Add-on ${addonType} is already active`);
+  }
+
+  // Require a paid subscription
+  const subDoc = await db.collection('subscriptions').doc(clinicId).get();
+  const sub = subDoc.data();
+  if (!sub?.stripeSubscriptionId) {
+    throw new functions.https.HttpsError('failed-precondition', 'A paid subscription is required to purchase add-ons');
+  }
+
+  const { ADDON_CONFIG_SERVER } = await import('./planConfig');
+  const addonConfig = ADDON_CONFIG_SERVER[addonType];
+
+  // ── Discount validation (server-side, non-negotiable) ────────────────────────
+  let stripeCouponId: string | undefined;
+  let discountDocRef: admin.firestore.DocumentReference | undefined;
+
+  if (discountCode) {
+    const discountSnap = await db.collection('discounts')
+      .where('code', '==', discountCode)
+      .limit(1)
+      .get();
+
+    if (discountSnap.empty) {
+      throw new functions.https.HttpsError('not-found', `Discount code "${discountCode}" not found`);
+    }
+
+    const discountDoc = discountSnap.docs[0];
+    const d = discountDoc.data();
+    discountDocRef = discountDoc.ref;
+
+    // Reject expired / exhausted codes
+    const expired = d.validUntil.toDate() <= new Date();
+    const exhausted = d.usedCount >= d.usageLimit;
+    if (expired || exhausted) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        `Discount code "${discountCode}" is ${expired ? 'expired' : 'no longer valid'}`,
+      );
+    }
+
+    // Reject codes that do not apply to add-ons
+    const at = d.appliesToAddons;
+    const appliesHere = at === 'all' || (Array.isArray(at) && at.includes(addonType));
+    if (!appliesHere) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        `Discount code "${discountCode}" applies to the base plan only, not to add-ons`,
+      );
+    }
+
+    // Create a one-off Stripe coupon for this percentage
+    const coupon = await getStripe().coupons.create({
+      percent_off: d.percentOff,
+      duration: 'forever',
+      name: discountCode,
+    });
+    stripeCouponId = coupon.id;
+  }
+
+  // ── Add subscription item ────────────────────────────────────────────────────
+  let stripeItem: Stripe.SubscriptionItem;
+  try {
+    stripeItem = await getStripe().subscriptionItems.create({
+      subscription: sub.stripeSubscriptionId,
+      price: getPriceId(addonType),
+      quantity: 1,
+      ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
+    });
+  } catch (err: unknown) {
+    const stripeErr = err as { type?: string; param?: string };
+    if (stripeErr?.type === 'StripeInvalidRequestError' && stripeErr?.param === 'plan') {
+      throw new functions.https.HttpsError('already-exists', `Add-on ${addonType} is already active on this subscription`);
+    }
+    throw err;
+  }
+
+  // ── Write to Firestore atomically ────────────────────────────────────────────
+  const addonId = `addon_${addonType}_${Date.now()}`;
+  const addonRef = db.collection('addons').doc(clinicId).collection('items').doc(addonId);
+  const clinicRef = db.collection('clinics').doc(clinicId);
+
+  await db.runTransaction(async (tx) => {
+    tx.set(addonRef, {
+      clinicId,
+      type: addonType,
+      price: addonConfig.price,
+      active: true,
+      stripeItemId: stripeItem.id,
+    });
+    tx.update(clinicRef, {
+      addons: FieldValue.arrayUnion(addonId),
+    });
+    if (discountDocRef) {
+      tx.update(discountDocRef, {
+        usedCount: FieldValue.increment(1),
+      });
+    }
+    // Extra Seats add-on: bump seats.max immediately
+    if (addonType === 'extra_seats') {
+      const { ADDON_SEATS_BONUS } = await import('./planConfig');
+      tx.update(clinicRef, {
+        'seats.max': FieldValue.increment(ADDON_SEATS_BONUS),
+      });
+    }
+  });
+
+  return { addonId, price: addonConfig.price };
 });
 
 /**
