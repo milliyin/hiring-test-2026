@@ -1,4 +1,5 @@
 import * as functions from 'firebase-functions';
+import { onSchedule } from 'firebase-functions/v2/scheduler';
 import * as admin from 'firebase-admin';
 import { Timestamp } from 'firebase-admin/firestore';
 import Stripe from 'stripe';
@@ -9,18 +10,25 @@ function getStripe(): Stripe {
   return _stripe;
 }
 
-const GRACE_PERIOD_DAYS = 7; // Document: chosen to match Stripe's own retry window
+/**
+ * Grace period duration (days).
+ * Matches Stripe's Smart Retry window so that by the time our grace period
+ * expires, Stripe has already exhausted all payment retries and will send
+ * customer.subscription.deleted. Our scheduled expiry acts as a safety net
+ * for any timing gaps between Stripe's deletion and our 7-day window.
+ */
+const GRACE_PERIOD_DAYS = 7;
 
 /**
  * Stripe webhook handler.
  * All billing state in Firestore is written here — never from the client.
  *
  * Events handled:
- *   - checkout.session.completed  → activate subscription
- *   - customer.subscription.updated → sync plan changes
- *   - invoice.payment_succeeded   → reset grace period, restore status
- *   - invoice.payment_failed      → enter grace period (Scenario 4)
- *   - customer.subscription.deleted → cancel subscription, revert to Free
+ *   - checkout.session.completed      → activate subscription
+ *   - customer.subscription.updated   → sync plan changes
+ *   - invoice.payment_succeeded       → reset grace period, restore status
+ *   - invoice.payment_failed          → enter grace period (Scenario 4)
+ *   - customer.subscription.deleted   → cancel subscription, revert to Free
  */
 export const handleStripeWebhook = functions.https.onRequest(async (req, res) => {
   const sig = req.headers['stripe-signature'];
@@ -59,19 +67,8 @@ export const handleStripeWebhook = functions.https.onRequest(async (req, res) =>
       }
 
       case 'invoice.payment_failed': {
-        // TODO [CHALLENGE]: Implement Scenario 4 — payment failure → grace period.
-        // Steps:
-        //   1. Look up the clinic by stripeCustomerId
-        //   2. Set subscription.status = 'grace_period'
-        //   3. Set subscription.gracePeriodEnd = now + GRACE_PERIOD_DAYS
-        //   4. Write to Firestore — Firestore rules will enforce restrictions automatically
-        //   5. Optionally: send a notification (email/push) to the owner
-        //
-        // Decision point: GRACE_PERIOD_DAYS is set to 7 above.
-        // Rationale: matches Stripe's Smart Retries window, so by the time grace ends,
-        // Stripe has already given up retrying.
         const invoice = event.data.object as Stripe.Invoice;
-        console.log('TODO [CHALLENGE]: Handle payment failure for invoice', invoice.id);
+        await handlePaymentFailed(db, invoice);
         break;
       }
 
@@ -91,6 +88,126 @@ export const handleStripeWebhook = functions.https.onRequest(async (req, res) =>
     res.status(500).send('Internal error');
   }
 });
+
+/**
+ * Scheduled function — runs hourly to expire grace periods.
+ *
+ * Stripe sends customer.subscription.deleted when it gives up retrying (after
+ * ~7 days), which triggers handleSubscriptionDeleted below. This scheduler is
+ * a safety net: if that webhook is missed or delayed, we still revert the plan.
+ *
+ * Production note: the compound query (status + gracePeriodEnd) requires a
+ * composite index in Firestore. Deploy with:
+ *   firebase deploy --only firestore:indexes
+ */
+export const expireGracePeriods = onSchedule('every 1 hours', async () => {
+  const count = await expireGracePeriodsLogic(admin.firestore());
+  if (count > 0) {
+    console.log(`expireGracePeriods: reverted ${count} clinic(s) to Free`);
+  }
+});
+
+// ─── Exported business-logic functions (also used in tests) ──────────────────
+
+/**
+ * Handles invoice.payment_failed:
+ * sets subscription to grace_period with a 7-day window.
+ * Firestore rules will block new staff additions automatically.
+ */
+export async function handlePaymentFailed(
+  db: admin.firestore.Firestore,
+  invoice: Stripe.Invoice,
+): Promise<void> {
+  if (!invoice.customer) return;
+
+  const snap = await db
+    .collection('subscriptions')
+    .where('stripeCustomerId', '==', invoice.customer)
+    .limit(1)
+    .get();
+
+  if (snap.empty) {
+    console.warn('handlePaymentFailed: no subscription found for customer', invoice.customer);
+    return;
+  }
+
+  const gracePeriodEnd = Timestamp.fromDate(
+    new Date(Date.now() + GRACE_PERIOD_DAYS * 24 * 60 * 60 * 1000),
+  );
+
+  await snap.docs[0].ref.update({
+    status: 'grace_period',
+    gracePeriodEnd,
+  });
+}
+
+/**
+ * Reverts a clinic to the Free plan in a single atomic transaction:
+ * - Subscription: plan=free, status=canceled, clears stripeSubscriptionId + gracePeriodEnd
+ * - Clinic: plan=free, seats.max=1, seats.used=0
+ * - All active staff seats: active=false
+ *
+ * Shared by handleSubscriptionDeleted and expireGracePeriodsLogic.
+ */
+export async function revertToFree(
+  db: admin.firestore.Firestore,
+  clinicId: string,
+  subRef: admin.firestore.DocumentReference,
+): Promise<void> {
+  const staffSeatsSnap = await db
+    .collection('seats')
+    .doc(clinicId)
+    .collection('members')
+    .where('active', '==', true)
+    .where('role', '==', 'staff')
+    .get();
+
+  const clinicRef = db.collection('clinics').doc(clinicId);
+
+  await db.runTransaction(async (tx) => {
+    tx.update(subRef, {
+      plan: 'free',
+      status: 'canceled',
+      stripeSubscriptionId: null,
+      gracePeriodEnd: null,
+    });
+
+    tx.update(clinicRef, {
+      plan: 'free',
+      'seats.max': 1,
+      'seats.used': 0,
+    });
+
+    for (const seatDoc of staffSeatsSnap.docs) {
+      tx.update(seatDoc.ref, { active: false });
+    }
+  });
+}
+
+/**
+ * Queries all subscriptions past their gracePeriodEnd and reverts each to Free.
+ * Returns the number of subscriptions expired.
+ * Exported for testing without needing the scheduled function wrapper.
+ */
+export async function expireGracePeriodsLogic(
+  db: admin.firestore.Firestore,
+): Promise<number> {
+  const snap = await db
+    .collection('subscriptions')
+    .where('status', '==', 'grace_period')
+    .where('gracePeriodEnd', '<=', Timestamp.now())
+    .get();
+
+  if (snap.empty) return 0;
+
+  await Promise.all(
+    snap.docs.map((doc) => revertToFree(db, doc.id, doc.ref)),
+  );
+
+  return snap.size;
+}
+
+// ─── Private webhook handlers ─────────────────────────────────────────────────
 
 async function handleCheckoutCompleted(
   db: admin.firestore.Firestore,
@@ -117,12 +234,11 @@ async function handleCheckoutCompleted(
       stripeCustomerId: session.customer,
       stripeSubscriptionId: session.subscription,
       currentPeriodEnd: Timestamp.fromDate(
-        new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // ~1 month
+        new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       ),
       gracePeriodEnd: null,
     }, { merge: true });
 
-    // Update clinic's plan mirror and seat max
     tx.update(clinicRef, {
       plan,
       'seats.max': planConfig.seats,
@@ -148,7 +264,6 @@ async function handleSubscriptionUpdated(
   const subDoc = snap.docs[0];
   const clinicId = subDoc.id;
 
-  // Map the active price ID back to a plan name using environment variables
   const priceId = stripeSubscription.items.data[0]?.price.id;
   if (!priceId) {
     console.warn('No price found on subscription', stripeSubscription.id);
@@ -196,40 +311,7 @@ async function handleSubscriptionDeleted(
   }
 
   const subDoc = snap.docs[0];
-  const clinicId = subDoc.id;
-
-  // Query all active staff seats (owner keeps their seat)
-  const staffSeatsSnap = await db
-    .collection('seats')
-    .doc(clinicId)
-    .collection('members')
-    .where('active', '==', true)
-    .where('role', '==', 'staff')
-    .get();
-
-  const clinicRef = db.collection('clinics').doc(clinicId);
-
-  await db.runTransaction(async (tx) => {
-    // Revert subscription to free / canceled
-    tx.update(subDoc.ref, {
-      plan: 'free',
-      status: 'canceled',
-      stripeSubscriptionId: null,
-      gracePeriodEnd: null,
-    });
-
-    // Mirror on clinic
-    tx.update(clinicRef, {
-      plan: 'free',
-      'seats.max': 1,
-      'seats.used': 0,
-    });
-
-    // Deactivate all staff seats — owner keeps theirs
-    for (const seatDoc of staffSeatsSnap.docs) {
-      tx.update(seatDoc.ref, { active: false });
-    }
-  });
+  await revertToFree(db, subDoc.id, subDoc.ref);
 }
 
 async function handlePaymentSucceeded(

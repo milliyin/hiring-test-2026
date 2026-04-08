@@ -29,9 +29,22 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/subscriptions/$(clinicId)).data.plan;
     }
 
+    // Returns the raw subscription document data for a clinic.
+    function getSubscription(clinicId) {
+      return get(/databases/$(database)/documents/subscriptions/$(clinicId)).data;
+    }
+
+    // True when the clinic's subscription is in a state where existing features
+    // remain accessible (active OR within the 7-day grace period after payment failure).
     function clinicIsActive(clinicId) {
-      let sub = get(/databases/$(database)/documents/subscriptions/$(clinicId)).data;
-      return sub.status == 'active' || sub.status == 'grace_period';
+      let status = getSubscription(clinicId).status;
+      return status == 'active' || status == 'grace_period';
+    }
+
+    // True ONLY when the subscription is fully active — not in grace period.
+    // Used to block new staff additions during payment failure (Scenario 4).
+    function clinicIsFullyActive(clinicId) {
+      return getSubscription(clinicId).status == 'active';
     }
 
     // Clinics collection
@@ -106,9 +119,11 @@ service cloud.firestore {
       allow write: if isOwner() && belongsToClinic(clinicId) && (
         // Allow deactivating a seat (active: false) or deleting — no limit check needed
         (request.resource == null || request.resource.data.active == false) ||
-        // Allow activating / creating a seat only if subscription is active and seat room exists
+        // Allow activating / creating a seat only if subscription is FULLY active
+        // (grace_period intentionally excluded — no new staff during payment failure)
+        // and seat capacity exists.
         (
-          clinicIsActive(clinicId) &&
+          clinicIsFullyActive(clinicId) &&
           get(/databases/$(database)/documents/clinics/$(clinicId)).data.seats.used <
           get(/databases/$(database)/documents/clinics/$(clinicId)).data.seats.max
         )

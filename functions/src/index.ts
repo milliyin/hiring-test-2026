@@ -4,5 +4,5 @@ import * as admin from 'firebase-admin';
 admin.initializeApp();
 
 // Export all Cloud Functions
-export { handleStripeWebhook } from './stripe/webhook';
+export { handleStripeWebhook, expireGracePeriods } from './stripe/webhook';
 export { createCheckoutSession, purchaseAddon, initiateDowngrade, removeStaffMember } from './stripe/checkout';

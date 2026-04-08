@@ -6,6 +6,7 @@ import { router } from 'expo-router';
 import { useAuth } from '@/hooks/useAuth';
 import { useClinic } from '@/hooks/useClinic';
 import { useSubscription } from '@/hooks/useSubscription';
+import { useClinicStore } from '@/store/clinicStore';
 import { getClinicAddons, getClinicDiscounts } from '@/services/firestore';
 import { purchaseAddon } from '@/services/stripe';
 import { PlanBadge } from '@/components/PlanBadge';
@@ -19,6 +20,12 @@ export default function BillingScreen() {
   const { isOwner } = useAuth();
   const { clinic } = useClinic();
   const { plan, status, config, seatsUsed, seatsMax } = useSubscription();
+  const { subscription } = useClinicStore();
+
+  const gracePeriodEnd: Date | null =
+    subscription?.gracePeriodEnd != null
+      ? subscription.gracePeriodEnd.toDate()
+      : null;
   const [addons, setAddons] = useState<Addon[]>([]);
   const [discounts, setDiscounts] = useState<Discount[]>([]);
   const [pendingAddon, setPendingAddon] = useState<string | null>(null);
@@ -95,8 +102,17 @@ export default function BillingScreen() {
               Payment failed. You have a grace period to resolve this.
               New staff cannot be added until billing is resolved.
             </Text>
-            {/* TODO [CHALLENGE]: Show gracePeriodEnd date from subscription */}
-            {/* TODO [CHALLENGE]: After grace period ends, plan reverts to Free (Scenario 4) */}
+            {gracePeriodEnd != null && (
+              <Text style={[styles.warningText, { marginTop: 4, fontWeight: '600' }]}>
+                Access ends:{' '}
+                {gracePeriodEnd.toLocaleDateString('en-CH', {
+                  day: 'numeric',
+                  month: 'long',
+                  year: 'numeric',
+                })}
+                {' — plan reverts to Free after this date.'}
+              </Text>
+            )}
           </View>
         )}
       </View>
