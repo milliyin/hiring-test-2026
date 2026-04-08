@@ -12,16 +12,29 @@
  *   - 1 active discount (20% off base plan only)
  *   - 1 expired discount (15% off all add-ons — for Scenario 5)
  *   - 4 appointments (mix of statuses)
+ *
+ * Architecture note:
+ *   Auth operations use the Firebase client SDK (the only way to create Auth users
+ *   with passwords via the emulator). All Firestore writes use the Admin SDK, which
+ *   bypasses security rules — this is correct for a seed script and is why
+ *   `allow write: if false` on subscriptions/addons/discounts doesn't break seeding.
  */
 
+// ─── Admin SDK (Firestore — bypasses security rules) ─────────────────────────
+process.env.FIRESTORE_EMULATOR_HOST = 'localhost:8080';
+process.env.FIREBASE_AUTH_EMULATOR_HOST = 'localhost:9099';
+
+import * as admin from 'firebase-admin';
+
+admin.initializeApp({ projectId: 'clinic-test-local' });
+const db = admin.firestore();
+const { Timestamp, FieldValue } = admin.firestore;
+
+// ─── Client SDK (Auth only — needed to create users with passwords) ───────────
 import { initializeApp } from 'firebase/app';
 import {
-  getFirestore, connectFirestoreEmulator,
-  doc, setDoc, Timestamp,
-} from 'firebase/firestore';
-import {
   getAuth, connectAuthEmulator,
-  createUserWithEmailAndPassword, updateProfile,signInWithEmailAndPassword,
+  createUserWithEmailAndPassword, updateProfile,
 } from 'firebase/auth';
 
 const firebaseConfig = {
@@ -35,12 +48,18 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig, 'seed');
 const auth = getAuth(app);
-const db = getFirestore(app);
-
 connectAuthEmulator(auth, 'http://localhost:9099', { disableWarnings: true });
-connectFirestoreEmulator(db, 'localhost', 8080);
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const CLINIC_ID = 'clinic_alpine_001';
+
+function makeDate(daysFromNow: number, hour: number): admin.firestore.Timestamp {
+  const d = new Date();
+  d.setDate(d.getDate() + daysFromNow);
+  d.setHours(hour, 0, 0, 0);
+  return Timestamp.fromDate(d);
+}
 
 async function createUser(
   email: string,
@@ -49,10 +68,13 @@ async function createUser(
   role: 'owner' | 'staff' | 'patient',
   clinicId: string | null,
 ): Promise<string> {
+  // Create the Auth user via client SDK (only way to set a password in emulator)
   const cred = await createUserWithEmailAndPassword(auth, email, password);
   await updateProfile(cred.user, { displayName });
+  const uid = cred.user.uid;
 
-  await setDoc(doc(db, 'users', cred.user.uid), {
+  // Write the Firestore user doc via Admin SDK (bypasses rules)
+  await db.doc(`users/${uid}`).set({
     displayName,
     email,
     role,
@@ -60,24 +82,26 @@ async function createUser(
     createdAt: Timestamp.now(),
   });
 
-  console.log(`  ✓ Created ${role}: ${email} (uid: ${cred.user.uid})`);
-  return cred.user.uid;
+  console.log(`  ✓ Created ${role}: ${email} (uid: ${uid})`);
+  return uid;
 }
+
+// ─── Main seed ────────────────────────────────────────────────────────────────
 
 async function seed() {
   console.log('Seeding Firebase Emulator...\n');
 
   // Users
   console.log('Creating users...');
-  const ownerId   = await createUser('sophie.owner@test.com', 'test1234', 'Sophie Moreau',     'owner',   CLINIC_ID);
-  const staff1Id  = await createUser('anna.staff@test.com',   'test1234', 'Anna Kellenberger', 'staff',   CLINIC_ID);
-  const staff2Id  = await createUser('marc.staff@test.com',   'test1234', 'Marc Dubois',       'staff',   CLINIC_ID);
-  const patient1Id = await createUser('patient1@test.com',    'test1234', 'Léa Fontaine',      'patient', CLINIC_ID);
-  const patient2Id = await createUser('patient2@test.com',    'test1234', 'Thomas Müller',     'patient', CLINIC_ID);
+  const ownerId    = await createUser('sophie.owner@test.com', 'test1234', 'Sophie Moreau',     'owner',   CLINIC_ID);
+  const staff1Id   = await createUser('anna.staff@test.com',   'test1234', 'Anna Kellenberger', 'staff',   CLINIC_ID);
+  const staff2Id   = await createUser('marc.staff@test.com',   'test1234', 'Marc Dubois',       'staff',   CLINIC_ID);
+  const patient1Id = await createUser('patient1@test.com',     'test1234', 'Léa Fontaine',      'patient', CLINIC_ID);
+  const patient2Id = await createUser('patient2@test.com',     'test1234', 'Thomas Müller',     'patient', CLINIC_ID);
 
   // Clinic
   console.log('\nCreating clinic...');
-  await setDoc(doc(db, 'clinics', CLINIC_ID), {
+  await db.doc(`clinics/${CLINIC_ID}`).set({
     name: 'Alpine Aesthetics Clinic',
     ownerId,
     plan: 'pro',
@@ -93,7 +117,7 @@ async function seed() {
   const periodEnd = new Date();
   periodEnd.setDate(periodEnd.getDate() + 18); // 18 days left in cycle
 
-  await setDoc(doc(db, 'subscriptions', CLINIC_ID), {
+  await db.doc(`subscriptions/${CLINIC_ID}`).set({
     clinicId: CLINIC_ID,
     plan: 'pro',
     status: 'active',
@@ -106,7 +130,7 @@ async function seed() {
 
   // Add-on
   console.log('\nCreating add-on...');
-  await setDoc(doc(db, 'addons', CLINIC_ID, 'items', 'addon_storage_001'), {
+  await db.doc(`addons/${CLINIC_ID}/items/addon_storage_001`).set({
     clinicId: CLINIC_ID,
     type: 'extra_storage',
     price: 19,
@@ -118,10 +142,9 @@ async function seed() {
   // Discounts
   console.log('\nCreating discounts...');
 
-  // Active discount — applies to base plan only
   const validUntil = new Date();
   validUntil.setFullYear(validUntil.getFullYear() + 1);
-  await setDoc(doc(db, 'discounts', 'discount_welcome_001'), {
+  await db.doc('discounts/discount_welcome_001').set({
     code: 'WELCOME20',
     percentOff: 20,
     appliesToBase: true,
@@ -132,10 +155,9 @@ async function seed() {
   });
   console.log('  ✓ Discount: WELCOME20 — 20% off base plan (valid 1 year)');
 
-  // Expired discount — 15% off all add-ons (for Scenario 5)
   const expiredDate = new Date();
   expiredDate.setDate(expiredDate.getDate() - 7); // expired 7 days ago
-  await setDoc(doc(db, 'discounts', 'discount_addons_exp'), {
+  await db.doc('discounts/discount_addons_exp').set({
     code: 'ADDONS15',
     percentOff: 15,
     appliesToBase: false,
@@ -146,22 +168,19 @@ async function seed() {
   });
   console.log('  ✓ Discount: ADDONS15 — 15% off all add-ons (EXPIRED — for Scenario 5)');
 
-  // Sign in as owner for all remaining writes (rules now require authenticated owner)
-  await signInWithEmailAndPassword(auth, 'sophie.owner@test.com', 'test1234');
-
-  // Seats
+  // Seats (Admin SDK — no auth needed, bypasses rules)
   console.log('\nCreating seats...');
-  await setDoc(doc(db, 'seats', CLINIC_ID, 'members', ownerId), {
+  await db.doc(`seats/${CLINIC_ID}/members/${ownerId}`).set({
     role: 'owner',
     joinedAt: Timestamp.now(),
     active: true,
   });
-  await setDoc(doc(db, 'seats', CLINIC_ID, 'members', staff1Id), {
+  await db.doc(`seats/${CLINIC_ID}/members/${staff1Id}`).set({
     role: 'staff',
     joinedAt: Timestamp.now(),
     active: true,
   });
-  await setDoc(doc(db, 'seats', CLINIC_ID, 'members', staff2Id), {
+  await db.doc(`seats/${CLINIC_ID}/members/${staff2Id}`).set({
     role: 'staff',
     joinedAt: Timestamp.now(),
     active: true,
@@ -170,14 +189,7 @@ async function seed() {
 
   // Appointments
   console.log('\nCreating appointments...');
-  const makeDate = (daysFromNow: number, hour: number) => {
-    const d = new Date();
-    d.setDate(d.getDate() + daysFromNow);
-    d.setHours(hour, 0, 0, 0);
-    return Timestamp.fromDate(d);
-  };
-
-  await setDoc(doc(db, 'appointments', 'appt_001'), {
+  await db.doc('appointments/appt_001').set({
     patientId: patient1Id,
     staffId: staff1Id,
     clinicId: CLINIC_ID,
@@ -185,7 +197,7 @@ async function seed() {
     datetime: makeDate(1, 10),
     notes: 'Initial consultation',
   });
-  await setDoc(doc(db, 'appointments', 'appt_002'), {
+  await db.doc('appointments/appt_002').set({
     patientId: patient2Id,
     staffId: staff2Id,
     clinicId: CLINIC_ID,
@@ -193,7 +205,7 @@ async function seed() {
     datetime: makeDate(3, 14),
     notes: null,
   });
-  await setDoc(doc(db, 'appointments', 'appt_003'), {
+  await db.doc('appointments/appt_003').set({
     patientId: patient1Id,
     staffId: staff1Id,
     clinicId: CLINIC_ID,
@@ -201,7 +213,7 @@ async function seed() {
     datetime: makeDate(-5, 9),
     notes: 'Follow-up after treatment',
   });
-  await setDoc(doc(db, 'appointments', 'appt_004'), {
+  await db.doc('appointments/appt_004').set({
     patientId: patient2Id,
     staffId: staff1Id,
     clinicId: CLINIC_ID,

@@ -35,6 +35,12 @@ service cloud.firestore {
       return data != null && data.clinicId == clinicId;
     }
 
+    // Returns the clinicId for the current user — null if no user doc yet.
+    function getUserClinicId() {
+      let data = getUserData();
+      return data != null ? data.clinicId : null;
+    }
+
     // Safe subscription fetch — returns null if the doc doesn't exist yet.
     function getSubscription(clinicId) {
       let ref = /databases/$(database)/documents/subscriptions/$(clinicId);
@@ -58,6 +64,15 @@ service cloud.firestore {
     function clinicIsFullyActive(clinicId) {
       let sub = getSubscription(clinicId);
       return sub != null && sub.status == 'active';
+    }
+
+    // True when the user has an active seat in the clinic.
+    // Checked on appointment access so that a removed staff member loses access
+    // immediately when their seat is deactivated — even if their ID token hasn't
+    // expired yet (closes the 1-hour window left by revokeRefreshTokens alone).
+    function isSeatActive(clinicId, userId) {
+      let ref = /databases/$(database)/documents/seats/$(clinicId)/members/$(userId);
+      return exists(ref) && get(ref).data.active == true;
     }
 
     // Clinics collection
@@ -86,42 +101,38 @@ service cloud.firestore {
     // Subscriptions
     match /subscriptions/{clinicId} {
       allow read: if isAuthenticated() && belongsToClinic(clinicId);
-      // TODO [CHALLENGE]: Only allow writes from Cloud Functions (server-side via admin SDK)
-      // Hint: check request.auth.token.admin or use a service account claim
-      allow write: if isAuthenticated(); // emulator seed — tighten in challenge implementation
+      // Writes come exclusively from Cloud Functions via the Admin SDK.
+      // The Admin SDK bypasses Firestore rules entirely — allow write: if false
+      // blocks all client writes while leaving Admin SDK writes unaffected.
+      allow write: if false;
     }
 
     // Add-ons
     match /addons/{clinicId}/items/{addonId} {
       allow read: if isAuthenticated() && belongsToClinic(clinicId);
-      // TODO [CHALLENGE]: Only allow writes from Cloud Functions
-      allow write: if isAuthenticated(); // emulator seed — tighten in challenge implementation
+      allow write: if false; // Admin SDK only (Cloud Functions)
     }
 
     // Discounts — readable by owners to display in billing UI
     match /discounts/{discountId} {
       allow read: if isOwner();
-      // TODO [CHALLENGE]: Discounts are created server-side. Validate expiry and usage limit before applying.
-      allow write: if isAuthenticated(); // emulator seed — tighten in challenge implementation
+      allow write: if false; // Admin SDK only (Cloud Functions)
     }
 
     // Appointments
     match /appointments/{appointmentId} {
       allow read: if isAuthenticated() && (
-        // Staff and owners see all clinic appointments
-        isStaff() ||
-        // Patients see only their own
+        // Staff/owners: must have an active seat — closes the window between
+        // seat deactivation and token expiry (Scenario 6 enforcement at rule level)
+        (isStaff() && isSeatActive(getUserClinicId(), request.auth.uid)) ||
+        // Patients see only their own appointments
         resource.data.patientId == request.auth.uid
       );
 
-      allow create: if isStaff(); // Staff/owner books appointments
-
-      // TODO [CHALLENGE]: Add plan-based access control.
-      // Example: Advanced reporting (analytics on appointments) requires Premium or higher.
-      // Extra Storage add-on required to attach files to appointments.
-
-      allow update: if isStaff();
-      allow delete: if isOwner();
+      // Only staff with an active seat can create or update appointments
+      allow create: if isStaff() && isSeatActive(getUserClinicId(), request.auth.uid);
+      allow update: if isStaff() && isSeatActive(getUserClinicId(), request.auth.uid);
+      allow delete: if isOwner() && isSeatActive(getUserClinicId(), request.auth.uid);
     }
 
     // Seats

@@ -110,6 +110,9 @@ Custom claims are embedded in the ID token. Updating them requires the client to
 2. `admin.auth().revokeRefreshTokens(uid)` is called after the transaction (best-effort; if it fails, Firestore is still protected).
 3. UI shows a confirmation dialog before removal and a loading spinner during the async call. The member list refreshes automatically on success.
 
+**Additional enforcement — appointments rule:**
+`isSeatActive(clinicId, userId)` is checked in the appointments read/write rules. This means a removed staff member cannot access appointments even during the 1-hour window before their ID token expires — the seat deactivation takes effect immediately at the rule level, independent of role change and token revocation.
+
 ---
 
 ## Owner signup: sequential Firestore writes, not a batch
