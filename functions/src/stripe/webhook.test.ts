@@ -1,5 +1,6 @@
 /**
- * Integration tests for Scenario 4 — Payment failure / grace period.
+ * Integration tests for Scenario 4 (payment failure / grace period)
+ * and Scenario 5 (expired discount — usedCount only incremented on confirmed payment).
  *
  * Requires the Firestore emulator running on localhost:8080.
  * Start it with: firebase emulators:start --only firestore
@@ -8,7 +9,7 @@
 
 import * as admin from 'firebase-admin';
 import { Timestamp } from 'firebase-admin/firestore';
-import { handlePaymentFailed, revertToFree, expireGracePeriodsLogic } from './webhook';
+import { handlePaymentFailed, revertToFree, expireGracePeriodsLogic, handleCheckoutCompletedForTest } from './webhook';
 import type Stripe from 'stripe';
 
 // ─── Emulator setup ──────────────────────────────────────────────────────────
@@ -272,5 +273,68 @@ describe('expireGracePeriodsLogic', () => {
     }
     const d3 = (await db.collection('subscriptions').doc('clinic_eg_multi_3').get()).data()!;
     expect(d3.status).toBe('grace_period');
+  });
+});
+
+// ─── Scenario 5 — discount usedCount incremented on confirmed payment ─────────
+
+describe('handleCheckoutCompleted — discount usedCount', () => {
+  function makeSession(
+    clinicId: string,
+    customerId: string,
+    discountDocId?: string,
+  ): Stripe.Checkout.Session {
+    return {
+      customer: customerId,
+      subscription: `sub_${clinicId}`,
+      metadata: {
+        clinicId,
+        plan: 'pro',
+        ...(discountDocId ? { discountDocId } : {}),
+      },
+    } as unknown as Stripe.Checkout.Session;
+  }
+
+  it('increments discount usedCount on confirmed checkout', async () => {
+    const clinicId = 'clinic_s5_1';
+    const discountId = 'discount_s5_1';
+
+    await seedClinic(clinicId, { plan: 'free', seats: { used: 0, max: 1 } });
+    await db.collection('discounts').doc(discountId).set({
+      code: 'TEST20',
+      percentOff: 20,
+      appliesToBase: true,
+      appliesToAddons: [],
+      validUntil: Timestamp.fromDate(new Date(Date.now() + 86_400_000)),
+      usageLimit: 10,
+      usedCount: 2,
+    });
+
+    await handleCheckoutCompletedForTest(db, makeSession(clinicId, `cus_${clinicId}`, discountId));
+
+    const discountSnap = await db.collection('discounts').doc(discountId).get();
+    expect(discountSnap.data()!.usedCount).toBe(3); // incremented from 2 → 3
+  });
+
+  it('does NOT increment usedCount when no discount was applied', async () => {
+    const clinicId = 'clinic_s5_2';
+    const discountId = 'discount_s5_2';
+
+    await seedClinic(clinicId, { plan: 'free', seats: { used: 0, max: 1 } });
+    await db.collection('discounts').doc(discountId).set({
+      code: 'NODISCOUNT',
+      percentOff: 10,
+      appliesToBase: true,
+      appliesToAddons: [],
+      validUntil: Timestamp.fromDate(new Date(Date.now() + 86_400_000)),
+      usageLimit: 10,
+      usedCount: 5,
+    });
+
+    // No discountDocId in session metadata
+    await handleCheckoutCompletedForTest(db, makeSession(clinicId, `cus_${clinicId}`));
+
+    const discountSnap = await db.collection('discounts').doc(discountId).get();
+    expect(discountSnap.data()!.usedCount).toBe(5); // unchanged
   });
 });

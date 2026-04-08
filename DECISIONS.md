@@ -26,3 +26,33 @@ When the owner tries to downgrade and their active staff count exceeds the targe
 - Caller is owner
 - For activating a new seat: `subscription.status` is `active` AND `clinic.seats.used < clinic.seats.max`
 - Deactivating a seat is always allowed (needed for staff removal and cancellation cleanup)
+
+---
+
+## Scenario 4 — Grace period duration: 7 days
+
+**Choice: 7 days**
+
+Matches Stripe's Smart Retry window. By the time our grace period expires, Stripe has exhausted all payment retries and will send `customer.subscription.deleted`, which our webhook already handles (revert to Free, deactivate staff seats). The `expireGracePeriods` scheduled function (hourly) acts as a safety net in case the Stripe webhook is delayed or missed.
+
+**Enforcement:** Firestore `clinicIsFullyActive()` helper (status == 'active' only) blocks new seat activations during grace period. Existing features (appointments, add-ons, staff access) remain available throughout the grace window.
+
+---
+
+## Scenario 5 — Expired discount codes: honor until renewal
+
+**Choice: Honor active Stripe coupons until the subscription naturally renews.**
+
+When a discount code was valid at time of purchase, a Stripe coupon with `duration: 'forever'` is attached to the subscription item. If the Firestore discount record later expires (`validUntil` passes), we do NOT proactively strip the Stripe coupon.
+
+**Why:**
+- The customer made a purchasing decision based on the discount being applied. Retroactively removing it mid-cycle is a broken UX and could trigger disputes.
+- Stripe's `duration: 'forever'` means the coupon continues on each renewal invoice — this is intentional. The customer locked in the deal at a moment when the code was valid.
+- Proactive stripping would require tracking which Stripe subscription items have which coupons, calling `stripe.subscriptionItems.update` to remove the discount, and handling partial billing cycles. That complexity is not justified at this scale.
+- Most SaaS platforms (Notion, Linear, etc.) follow the same convention: lock in the rate, don't retroactively raise prices.
+
+**New applications:** Rejected at the function boundary via `isDiscountValid()` in both `createCheckoutSession` and `purchaseAddon`. Expired or exhausted codes throw `failed-precondition` before any Stripe API call is made.
+
+**usedCount timing:** Incremented in `checkout.session.completed` webhook (after confirmed payment), NOT at session creation. This prevents abandoned checkouts from consuming discount uses.
+
+**UI:** `DiscountTag` component renders expired discounts in grey with a red "Expired {date}" label, making the expiry state visible to the owner in the Billing screen.

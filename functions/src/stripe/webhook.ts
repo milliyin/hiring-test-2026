@@ -1,7 +1,7 @@
 import * as functions from 'firebase-functions';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import * as admin from 'firebase-admin';
-import { Timestamp } from 'firebase-admin/firestore';
+import { Timestamp, FieldValue } from 'firebase-admin/firestore';
 import Stripe from 'stripe';
 
 let _stripe: Stripe | null = null;
@@ -207,6 +207,17 @@ export async function expireGracePeriodsLogic(
   return snap.size;
 }
 
+/**
+ * Exported for testing only — thin wrapper so tests can call handleCheckoutCompleted
+ * without needing a full Stripe.Checkout.Session object.
+ */
+export async function handleCheckoutCompletedForTest(
+  db: admin.firestore.Firestore,
+  session: Stripe.Checkout.Session,
+): Promise<void> {
+  return handleCheckoutCompleted(db, session);
+}
+
 // ─── Private webhook handlers ─────────────────────────────────────────────────
 
 async function handleCheckoutCompleted(
@@ -243,6 +254,15 @@ async function handleCheckoutCompleted(
       plan,
       'seats.max': planConfig.seats,
     });
+
+    // Increment usedCount for the discount applied at checkout (Scenario 5).
+    // Done here — after confirmed payment — not at session creation, so abandoned
+    // checkouts do not consume a discount use.
+    const discountDocId = session.metadata?.discountDocId;
+    if (discountDocId) {
+      const discountRef = db.collection('discounts').doc(discountDocId);
+      tx.update(discountRef, { usedCount: FieldValue.increment(1) });
+    }
   });
 }
 

@@ -57,16 +57,49 @@ export const createCheckoutSession = functions.https.onCall(async (request) => {
     customerId = customer.id;
   }
 
-  // TODO [CHALLENGE]: Validate and apply discount code (Scenario 3 & 5).
-  // Before creating the session:
-  //   1. Look up the discount in Firestore by code
-  //   2. Check isDiscountValid() — reject expired codes (Scenario 5)
-  //   3. Check appliesToBase — if false, do not apply to the base plan checkout
-  //   4. If valid and applicable, create or retrieve a Stripe Coupon and attach to session
-  //   5. Increment discount.usedCount atomically (Firestore transaction)
+  // ── Discount validation for base-plan checkout ───────────────────────────────
+  // usedCount is incremented in the checkout.session.completed webhook, NOT here.
+  // Reason: incrementing here would consume the code even if the user abandons checkout.
+  // The discountDocId is passed through session metadata so the webhook can find it.
   let stripeCouponId: string | undefined;
+  let discountDocId: string | undefined;
+
   if (discountCode) {
-    console.log('TODO [CHALLENGE]: Validate and apply discount code:', discountCode);
+    const discountSnap = await db.collection('discounts')
+      .where('code', '==', discountCode)
+      .limit(1)
+      .get();
+
+    if (discountSnap.empty) {
+      throw new functions.https.HttpsError('not-found', `Discount code "${discountCode}" not found`);
+    }
+
+    const discountDoc = discountSnap.docs[0];
+    const d = discountDoc.data();
+
+    const expired = d.validUntil.toDate() <= new Date();
+    const exhausted = d.usedCount >= d.usageLimit;
+    if (expired || exhausted) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        `Discount code "${discountCode}" is ${expired ? 'expired' : 'no longer valid'}`,
+      );
+    }
+
+    if (!d.appliesToBase) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        `Discount code "${discountCode}" applies to add-ons only, not to the base plan`,
+      );
+    }
+
+    const coupon = await getStripe().coupons.create({
+      percent_off: d.percentOff,
+      duration: 'forever',
+      name: discountCode,
+    });
+    stripeCouponId = coupon.id;
+    discountDocId = discountDoc.id;
   }
 
   const appUrl = process.env.APP_URL ?? 'http://localhost:8081';
@@ -75,7 +108,7 @@ export const createCheckoutSession = functions.https.onCall(async (request) => {
     mode: 'subscription',
     line_items: [{ price: getPriceId(plan), quantity: 1 }],
     ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
-    metadata: { clinicId, plan },
+    metadata: { clinicId, plan, ...(discountDocId ? { discountDocId } : {}) },
     success_url: `${appUrl}/(app)/billing?success=true`,
     cancel_url: `${appUrl}/(app)/billing?canceled=true`,
   });
