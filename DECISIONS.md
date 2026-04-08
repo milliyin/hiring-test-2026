@@ -1,5 +1,35 @@
 # Architecture decisions
 
+## Scenario 1 — Plan upgrade: webhook-first, not optimistic
+
+**Choice: Firestore reflects the new plan only after `checkout.session.completed` fires.**
+
+The client calls `createCheckoutSession`, which redirects to Stripe Checkout. Firestore is NOT updated at session creation — it is updated only in `handleCheckoutCompleted` after Stripe confirms the payment.
+
+**Why:**
+- A session can be abandoned, the payment can fail, or the card can be declined. Updating Firestore at session creation would show a plan upgrade that was never paid for.
+- Stripe guarantees `checkout.session.completed` fires exactly once on confirmed payment. This is the correct moment to change state.
+- Proration is handled entirely by Stripe (subscription item price change). We don't attempt to calculate it ourselves.
+
+**Seat limit update:** `clinic.seats.max` is updated in the same webhook handler to the new plan's limit, atomically with the plan field. This means the UI shows the correct seat capacity immediately after the webhook processes — no polling needed, since the Zustand store subscribes to the Firestore `clinics` doc in real-time.
+
+---
+
+## Scenario 3 — Add-on purchase: server-side discount enforcement
+
+**Choice: All discount validation runs in the Cloud Function, not the client.**
+
+The client sends the discount code; the `purchaseAddon` function re-validates it before any Stripe API call. The client-side `calculateDiscountedPrice` (in `src/types/discount.ts`) is used only for UI display.
+
+**Why server-side:**
+- The client is untrusted. If discount validation ran only in the UI, any user could intercept the function call and inject an arbitrary coupon.
+- `purchaseAddon` checks: code exists in Firestore, not expired (`validUntil`), not exhausted (`usedCount < maxUses`), and `appliesToAddons === true`. Any failure throws `failed-precondition` before touching Stripe.
+- The Stripe coupon is created on-the-fly (not stored in Stripe ahead of time) because discount codes are stored in Firestore and only become Stripe objects when applied. This avoids maintaining a parallel coupon catalog in Stripe.
+
+**Duplicate add-on check:** If the clinic already has the add-on in `addons/{clinicId}/items/{addonId}`, the function throws `already-exists` rather than creating a duplicate Stripe subscription item. This is enforced server-side, not by Firestore rules alone.
+
+---
+
 ## Scenario 2 — Downgrade with seat conflict: Block vs Queue
 
 **Choice: Block (Option A)**
@@ -79,3 +109,49 @@ Custom claims are embedded in the ID token. Updating them requires the client to
    - `clinics/{clinicId}.seats.used -= 1` — keeps seat counter accurate
 2. `admin.auth().revokeRefreshTokens(uid)` is called after the transaction (best-effort; if it fails, Firestore is still protected).
 3. UI shows a confirmation dialog before removal and a loading spinner during the async call. The member list refreshes automatically on success.
+
+---
+
+## Owner signup: sequential Firestore writes, not a batch
+
+**Choice: `signUp()` writes documents sequentially — users → clinic → subscription → seat — not in a single batch.**
+
+**Why:**
+Firestore security rules evaluate in real-time against the current database state at the moment of each write. A batch write commits all documents atomically, but the rules for each document in the batch cannot see documents written by the *same* batch. This means:
+
+- The `clinic` write rule calls `getUserRole()` which reads `users/{uid}`. If users and clinic are in the same batch, the rule sees no users doc yet → denied.
+- The `seat` write rule calls `clinicIsFullyActive()` which reads `subscriptions/{clinicId}`. Same problem.
+
+Sequential writes avoid this: by the time we write the clinic, the users doc already exists. By the time we write the seat, the subscription already exists. Each rule check passes because the preceding document is committed.
+
+**Trade-off:** Sequential writes are slower (~4 round trips vs 1). Acceptable at signup — this is a one-time, user-initiated flow where a 500ms delay is unnoticeable.
+
+---
+
+## Platform abstraction: runtime require() over conditional imports
+
+**Choice: `src/services/auth.ts` and `src/services/firestore.ts` use `Platform.OS === 'web' ? require('firebase/auth') : require('@react-native-firebase/auth')` at runtime.**
+
+This project targets both Expo Web and React Native (iOS/Android). The two platforms need different Firebase SDKs:
+- Web: modular `firebase/auth`, `firebase/firestore` (v10 compat)
+- Native: `@react-native-firebase/auth`, `@react-native-firebase/firestore` (native module bridge)
+
+**Why runtime require() instead of separate entry points:**
+- Expo Router's file-based routing makes platform-specific files (`.web.ts` / `.native.ts`) awkward for service files that are imported by shared screens.
+- A single service file with internal branching keeps the import graph simple — screens don't need to know which platform they're on.
+- The `require()` calls are cached by Metro/webpack after the first call; there's no repeated evaluation.
+
+**Trade-off:** TypeScript loses some type inference on the required modules (typed as `any` in some places). Mitigated by wrapping platform differences in typed helper functions (`fsSet`, `now`, `futureTimestamp`) so call sites are fully typed.
+
+---
+
+## Test strategy: integration tests against real emulator, not mocks
+
+**Choice: `webhook.test.ts` and `checkout.test.ts` run against the live Firestore emulator via the Admin SDK. No Firestore mocking.**
+
+**Why:**
+- Mocked Firestore (e.g. `jest-mock-firestore`) validates that you called the right methods, not that the data is correct. Our prior experience: mocked tests passed while a real Firestore migration failed because the mock didn't enforce field types.
+- The emulator is already running for manual development. Reusing it for tests means the test environment matches production behavior exactly — including security rules, transaction semantics, and index behavior.
+- `beforeEach` calls the emulator REST API to clear all data, so each test starts with a known state.
+
+**Trade-off:** Tests require the emulator to be running (`firebase emulators:start`). They also wipe emulator data in `beforeEach`, so running tests during a manual session destroys your seed data. Solution: run `npm run seed` from the root after a test run to restore test accounts.
