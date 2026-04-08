@@ -89,3 +89,13 @@ export async function initiateDowngrade(
     return result.data as DowngradeResult;
   }
 }
+
+export async function removeStaffMember(clinicId: string, targetUserId: string): Promise<void> {
+  if (Platform.OS === 'web') {
+    const { httpsCallable } = functionsModule;
+    const fn = httpsCallable(functions, 'removeStaffMember');
+    await fn({ clinicId, targetUserId });
+  } else {
+    await functions().httpsCallable('removeStaffMember')({ clinicId, targetUserId });
+  }
+}

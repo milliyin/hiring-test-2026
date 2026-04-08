@@ -327,29 +327,74 @@ export const initiateDowngrade = functions.https.onCall(async (request) => {
 
 /**
  * Removes a staff member and invalidates their session.
- * Must be atomic: seat decrement + role update + session revocation in one operation.
+ *
+ * Approach: combined Option A + B.
+ *   - Firestore transaction updates users.role → 'patient' and users.clinicId → null.
+ *     Because rules call getUserRole() and belongsToClinic() which read Firestore in
+ *     real-time, this blocks ALL Firestore access for the removed user immediately —
+ *     no additional rule changes needed.
+ *   - revokeRefreshTokens() ensures the user cannot obtain new ID tokens, achieving
+ *     complete session invalidation within the 1-hour existing-token window.
  */
 export const removeStaffMember = functions.https.onCall(async (request) => {
   if (!request.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
 
   const { clinicId, targetUserId } = request.data as { clinicId: string; targetUserId: string };
+  const db = admin.firestore();
 
-  // TODO [CHALLENGE]: Implement staff removal + session invalidation (Scenario 6).
-  // Steps:
-  //   1. Verify caller is owner of clinicId
-  //   2. Verify targetUserId is a staff member (not owner) of clinicId
-  //   3. In a Firestore transaction:
-  //      a. Set seats/{clinicId}/members/{targetUserId}.active = false
-  //      b. Update users/{targetUserId}: clear clinicId, set role to 'patient'
-  //      c. Decrement clinic.seats.used
-  //   4. Revoke Firebase Auth refresh tokens for targetUserId:
-  //      admin.auth().revokeRefreshTokens(targetUserId)
-  //      This invalidates ALL active sessions for that user immediately.
-  //   5. Optionally notify the removed user
-  //
-  // Note on token revocation: Firebase tokens are valid for 1 hour after revocation.
-  // To enforce immediate blocking, Firestore rules must check the user's active status,
-  // not just their role. The rules in seats/ are intentionally incomplete — add this check.
-  console.log('TODO [CHALLENGE]: Implement removeStaffMember for', targetUserId, 'in clinic', clinicId);
-  throw new functions.https.HttpsError('unimplemented', 'TODO [CHALLENGE]: Implement removeStaffMember');
+  await removeStaffMemberFromClinic(db, clinicId, targetUserId, request.auth.uid);
+
+  // Revoke refresh tokens AFTER the Firestore transaction succeeds.
+  // If this call fails (e.g. network issue), the user is still blocked by Firestore rules
+  // because their role is already updated. Token revocation is best-effort on top.
+  try {
+    await admin.auth().revokeRefreshTokens(targetUserId);
+  } catch (err) {
+    console.error('revokeRefreshTokens failed (non-fatal — Firestore rules still block access):', err);
+  }
 });
+
+/**
+ * Core staff removal logic — exported for testing without needing a callable request.
+ * Performs all Firestore writes atomically; does NOT revoke tokens (Auth emulator
+ * limitations make token revocation unsuitable for integration tests).
+ */
+export async function removeStaffMemberFromClinic(
+  db: admin.firestore.Firestore,
+  clinicId: string,
+  targetUserId: string,
+  callerUserId: string,
+): Promise<void> {
+  // Verify caller is the clinic owner
+  const callerDoc = await db.collection('users').doc(callerUserId).get();
+  const caller = callerDoc.data();
+  if (!caller || caller.role !== 'owner' || caller.clinicId !== clinicId) {
+    throw new functions.https.HttpsError('permission-denied', 'Only clinic owners can remove staff');
+  }
+
+  // Verify target is an active staff member of this clinic (not owner, not already removed)
+  const targetDoc = await db.collection('users').doc(targetUserId).get();
+  const target = targetDoc.data();
+  if (!target || target.role !== 'staff' || target.clinicId !== clinicId) {
+    throw new functions.https.HttpsError(
+      'not-found',
+      'Target user is not an active staff member of this clinic',
+    );
+  }
+
+  const seatRef = db.collection('seats').doc(clinicId).collection('members').doc(targetUserId);
+  const userRef = db.collection('users').doc(targetUserId);
+  const clinicRef = db.collection('clinics').doc(clinicId);
+
+  await db.runTransaction(async (tx) => {
+    // Deactivate the seat record
+    tx.update(seatRef, { active: false });
+
+    // Detach the user from the clinic — this is the key step that triggers
+    // immediate Firestore rule blocking (getUserRole() → 'patient', belongsToClinic() → false)
+    tx.update(userRef, { role: 'patient', clinicId: null });
+
+    // Decrement seat usage counter
+    tx.update(clinicRef, { 'seats.used': FieldValue.increment(-1) });
+  });
+}

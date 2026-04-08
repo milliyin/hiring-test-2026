@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, TouchableOpacity,
+  View, Text, FlatList, StyleSheet, TouchableOpacity, Alert, ActivityIndicator,
 } from 'react-native';
 import { useAuth } from '@/hooks/useAuth';
 import { useClinic } from '@/hooks/useClinic';
 import { useSubscription } from '@/hooks/useSubscription';
 import { getClinicMembers } from '@/services/firestore';
+import { revokeUserSession } from '@/services/auth';
 import { SeatUsageBar } from '@/components/SeatUsageBar';
 import type { User } from '@/types/user';
 
@@ -14,6 +15,8 @@ export default function StaffScreen() {
   const { clinic } = useClinic();
   const { seatsUsed, seatsMax, canAddStaff, isGracePeriod } = useSubscription();
   const [members, setMembers] = useState<User[]>([]);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!clinic) return;
@@ -47,10 +50,24 @@ export default function StaffScreen() {
     alert('TODO: Implement staff invite flow (see StaffScreen TODO)');
   }
 
-  function handleRemoveStaff(user: User) {
-    alert(
-      'Remove staff member: ' + user.displayName + '? Their active session will also be invalidated.'
-    );
+  function handleRemoveStaff(userId: string) {
+    setConfirmingId(userId);
+  }
+
+  async function confirmRemove(userId: string) {
+    if (!clinic) return;
+    setConfirmingId(null);
+    setRemovingId(userId);
+    try {
+      await revokeUserSession(clinic.id, userId);
+      const updated = await getClinicMembers(clinic.id);
+      setMembers(updated.filter((u) => u.role === 'staff' || u.role === 'owner'));
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message ?? 'Failed to remove staff member.';
+      Alert.alert('Error', msg);
+    } finally {
+      setRemovingId(null);
+    }
   }
 
   function renderMember({ item }: { item: User }) {
@@ -71,9 +88,24 @@ export default function StaffScreen() {
             </Text>
           </View>
           {isOwner && !isCurrentUserOwner && (
-            <TouchableOpacity onPress={() => handleRemoveStaff(item)}>
-              <Text style={styles.removeButton}>Remove</Text>
-            </TouchableOpacity>
+            removingId === item.id
+              ? <ActivityIndicator size="small" color="#ef4444" />
+              : confirmingId === item.id
+                ? (
+                  <View style={styles.confirmRow}>
+                    <TouchableOpacity onPress={() => confirmRemove(item.id)}>
+                      <Text style={styles.confirmYes}>Confirm</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setConfirmingId(null)}>
+                      <Text style={styles.confirmNo}>Cancel</Text>
+                    </TouchableOpacity>
+                  </View>
+                )
+                : (
+                  <TouchableOpacity onPress={() => handleRemoveStaff(item.id)}>
+                    <Text style={styles.removeButton}>Remove</Text>
+                  </TouchableOpacity>
+                )
           )}
         </View>
       </View>
@@ -155,6 +187,9 @@ const styles = StyleSheet.create({
   roleText: { fontSize: 11, fontWeight: '700', color: '#374151' },
   roleTextOwner: { color: '#92400e' },
   removeButton: { fontSize: 13, color: '#ef4444', fontWeight: '600' },
+  confirmRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  confirmYes: { fontSize: 13, color: '#ef4444', fontWeight: '700' },
+  confirmNo: { fontSize: 13, color: '#6b7280', fontWeight: '600' },
   empty: { fontSize: 14, color: '#9ca3af', textAlign: 'center', marginTop: 32 },
   restricted: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
   restrictedText: { fontSize: 16, color: '#6b7280', textAlign: 'center' },

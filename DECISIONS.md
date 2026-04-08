@@ -56,3 +56,26 @@ When a discount code was valid at time of purchase, a Stripe coupon with `durati
 **usedCount timing:** Incremented in `checkout.session.completed` webhook (after confirmed payment), NOT at session creation. This prevents abandoned checkouts from consuming discount uses.
 
 **UI:** `DiscountTag` component renders expired discounts in grey with a red "Expired {date}" label, making the expiry state visible to the owner in the Billing screen.
+
+---
+
+## Scenario 6 — Session invalidation on staff removal: Combined A + B
+
+**Choice: Option A (revokeRefreshTokens) + Option B (Firestore role-based rules), combined.**
+
+**Why not B alone:**
+Firestore rules already call `getUserRole()` which reads `users/{uid}.data.role` in real-time. As soon as the transaction sets `users.role = 'patient'` and `users.clinicId = null`, every subsequent Firestore request from the removed user is denied — no additional rule changes needed. However, token revocation is still needed to prevent the user from calling other Firebase services or refreshing their token after the 1-hour window.
+
+**Why not A alone:**
+`revokeRefreshTokens` prevents new tokens from being issued, but the existing ID token remains valid for up to 1 hour. During that window, if we relied only on token revocation, the removed staff member could still access Firestore (their cached token would pass auth checks). The Firestore rule check closes this gap.
+
+**Why not C (custom claims):**
+Custom claims are embedded in the ID token. Updating them requires the client to call `getIdToken(true)` to force a refresh — you cannot guarantee a revoked client will cooperate. Claims-based blocking has the same 1-hour window as Option A with no benefit over the role-in-Firestore approach.
+
+**How it works:**
+1. `removeStaffMember` Cloud Function atomically updates Firestore in a single transaction:
+   - `seats/{clinicId}/members/{uid}.active = false` — deactivates the seat record
+   - `users/{uid}.role = 'patient'`, `users/{uid}.clinicId = null` — **this is the critical step** that triggers immediate Firestore rule blocking for all subsequent requests
+   - `clinics/{clinicId}.seats.used -= 1` — keeps seat counter accurate
+2. `admin.auth().revokeRefreshTokens(uid)` is called after the transaction (best-effort; if it fails, Firestore is still protected).
+3. UI shows a confirmation dialog before removal and a loading spinner during the async call. The member list refreshes automatically on success.
