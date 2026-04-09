@@ -131,6 +131,30 @@ Sequential writes avoid this: by the time we write the clinic, the users doc alr
 
 ---
 
+## Staff invite: server-side user creation with temporary password
+
+**Choice: `inviteStaff` Cloud Function creates the Auth user and Firestore records. The owner receives a temporary password to share with the new staff member out-of-band.**
+
+**Why not email invite links:**
+- Firebase Dynamic Links are deprecated. Rolling a custom invite-link flow requires hosting a landing page, generating signed tokens, and handling link expiry — significant overhead for a hiring test scope.
+- Email delivery in emulator dev is unreliable without a third-party provider (SendGrid, etc.).
+
+**Why not a shareable clinic code:**
+- A clinic code requires the new user to self-register and then "join" — two flows instead of one. Ownership of the email address is unverified.
+
+**How it works:**
+1. Owner fills name + email in the inline invite form (no Modal — avoids Expo web re-render issues).
+2. Client calls `inviteStaff` Cloud Function.
+3. Function verifies: caller is owner of clinicId, subscription is `active` (not grace period), `seats.used < seats.max`.
+4. Creates Firebase Auth user (or resets password if email already exists via `getUserByEmail`).
+5. In a Firestore transaction: writes `users/{uid}` with `role: 'staff'`, `clinicId`; writes `seats/{clinicId}/members/{uid}` with `active: true`; increments `clinic.seats.used`.
+6. Returns `{ tempPassword }` to the client.
+7. UI shows credentials inline for the owner to copy and share. Hint displayed: "They should change their password after first login."
+
+**Security:** Seat availability is enforced server-side in the function before any write. The Firestore `clinicIsFullyActive()` rule on seat writes is a second enforcement layer. Temp password is 12 characters (alphanumeric), generated with `crypto.randomBytes`.
+
+---
+
 ## Platform abstraction: runtime require() over conditional imports
 
 **Choice: `src/services/auth.ts` and `src/services/firestore.ts` use `Platform.OS === 'web' ? require('firebase/auth') : require('@react-native-firebase/auth')` at runtime.**
