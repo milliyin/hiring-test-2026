@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, TouchableOpacity, Alert, ActivityIndicator,
+  View, Text, FlatList, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, TextInput,
 } from 'react-native';
 import { useAuth } from '@/hooks/useAuth';
 import { useClinic } from '@/hooks/useClinic';
 import { useSubscription } from '@/hooks/useSubscription';
 import { getClinicMembers } from '@/services/firestore';
 import { revokeUserSession } from '@/services/auth';
+import { inviteStaff } from '@/services/stripe';
 import { SeatUsageBar } from '@/components/SeatUsageBar';
 import type { User } from '@/types/user';
 
@@ -17,13 +18,18 @@ export default function StaffScreen() {
   const [members, setMembers] = useState<User[]>([]);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [showInviteForm, setShowInviteForm] = useState(false);
+  const [inviteName, setInviteName] = useState('');
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviting, setInviting] = useState(false);
+  const [inviteCredentials, setInviteCredentials] = useState<{ email: string; tempPassword: string } | null>(null);
 
   useEffect(() => {
-    if (!clinic) return;
+    if (!clinic || !isOwner) return;
     getClinicMembers(clinic.id).then((all) =>
       setMembers(all.filter((u) => u.role === 'staff' || u.role === 'owner')),
     );
-  }, [clinic?.id]);
+  }, [clinic?.id, isOwner]);
 
   if (!isOwner) {
     return (
@@ -35,19 +41,39 @@ export default function StaffScreen() {
 
   function handleInviteStaff() {
     if (!canAddStaff) {
-      if (isGracePeriod) {
-        alert('Billing issue: Your plan has a payment issue. Resolve billing before adding staff.');
-      } else {
-        alert('Seat limit reached: Upgrade your plan or purchase the Extra Seats add-on to add more staff.');
-      }
+      Alert.alert(
+        isGracePeriod ? 'Billing issue' : 'Seat limit reached',
+        isGracePeriod
+          ? 'Resolve your billing issue before adding new staff.'
+          : 'Upgrade your plan or purchase the Extra Seats add-on.',
+      );
       return;
     }
-    // TODO [CHALLENGE]: Implement staff invitation.
-    // Options: email invite link, direct email-based add, shareable clinic code.
-    // Whatever you choose: the invite must create a user with role='staff' and clinicId set.
-    // The server must check seat availability BEFORE creating the record (Firestore rules).
-    // Document your approach in DECISIONS.md.
-    alert('TODO: Implement staff invite flow (see StaffScreen TODO)');
+    setInviteName('');
+    setInviteEmail('');
+    setInviteCredentials(null);
+    setShowInviteForm(true);
+  }
+
+  async function handleSendInvite() {
+    if (!clinic || !inviteName.trim() || !inviteEmail.trim()) return;
+    setInviting(true);
+    try {
+      const { tempPassword } = await inviteStaff({
+        clinicId: clinic.id,
+        email: inviteEmail.trim().toLowerCase(),
+        displayName: inviteName.trim(),
+      });
+      setInviteCredentials({ email: inviteEmail.trim().toLowerCase(), tempPassword });
+      getClinicMembers(clinic.id)
+        .then((all) => setMembers(all.filter((u) => u.role === 'staff' || u.role === 'owner')))
+        .catch(() => {});
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message ?? 'Failed to invite staff member.';
+      Alert.alert('Invite failed', msg);
+    } finally {
+      setInviting(false);
+    }
   }
 
   function handleRemoveStaff(userId: string) {
@@ -116,13 +142,78 @@ export default function StaffScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <SeatUsageBar used={seatsUsed} max={seatsMax} />
-        {isOwner && (
+
+        {isOwner && !showInviteForm && (
           <TouchableOpacity
             style={[styles.inviteButton, !canAddStaff && styles.inviteButtonDisabled]}
             onPress={handleInviteStaff}
           >
             <Text style={styles.inviteText}>+ Invite staff</Text>
           </TouchableOpacity>
+        )}
+
+        {/* Inline invite form — no Modal, avoids web rendering issues */}
+        {showInviteForm && (
+          <View style={styles.inviteForm}>
+            {inviteCredentials ? (
+              // Success: show credentials for the owner to share
+              <>
+                <Text style={styles.inviteFormTitle}>Staff invited!</Text>
+                <Text style={styles.inviteFormLabel}>Share these login details:</Text>
+                <View style={styles.credBox}>
+                  <Text style={styles.credLine}>Email: <Text style={styles.credValue}>{inviteCredentials.email}</Text></Text>
+                  <Text style={styles.credLine}>Temp password: <Text style={styles.credValue}>{inviteCredentials.tempPassword}</Text></Text>
+                </View>
+                <Text style={styles.inviteFormHint}>They should change their password after first login.</Text>
+                <TouchableOpacity style={styles.inviteButton} onPress={() => setShowInviteForm(false)}>
+                  <Text style={styles.inviteText}>Done</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              // Input form
+              <>
+                <Text style={styles.inviteFormTitle}>Invite a staff member</Text>
+                <TextInput
+                  style={styles.inviteInput}
+                  placeholder="Full name"
+                  value={inviteName}
+                  onChangeText={setInviteName}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                />
+                <TextInput
+                  style={styles.inviteInput}
+                  placeholder="Email address"
+                  value={inviteEmail}
+                  onChangeText={setInviteEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  returnKeyType="go"
+                  onSubmitEditing={handleSendInvite}
+                />
+                <View style={styles.inviteActions}>
+                  <TouchableOpacity
+                    style={styles.cancelButton}
+                    onPress={() => setShowInviteForm(false)}
+                    disabled={inviting}
+                  >
+                    <Text style={styles.cancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.inviteButton, styles.inviteButtonFlex,
+                      (!inviteName.trim() || !inviteEmail.trim() || inviting) && styles.inviteButtonDisabled]}
+                    onPress={handleSendInvite}
+                    disabled={!inviteName.trim() || !inviteEmail.trim() || inviting}
+                  >
+                    {inviting
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <Text style={styles.inviteText}>Send invite</Text>
+                    }
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
         )}
       </View>
 
@@ -193,4 +284,26 @@ const styles = StyleSheet.create({
   empty: { fontSize: 14, color: '#9ca3af', textAlign: 'center', marginTop: 32 },
   restricted: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
   restrictedText: { fontSize: 16, color: '#6b7280', textAlign: 'center' },
+  inviteForm: {
+    marginTop: 12, borderTopWidth: 1, borderTopColor: '#e5e7eb', paddingTop: 12,
+  },
+  inviteFormTitle: { fontSize: 15, fontWeight: '700', color: '#111827', marginBottom: 10 },
+  inviteFormLabel: { fontSize: 13, color: '#6b7280', marginBottom: 8 },
+  inviteFormHint: { fontSize: 12, color: '#9ca3af', marginBottom: 10 },
+  inviteInput: {
+    borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8,
+    padding: 10, fontSize: 14, color: '#111827', marginBottom: 8, backgroundColor: '#fff',
+  },
+  inviteActions: { flexDirection: 'row', gap: 8 },
+  inviteButtonFlex: { flex: 1 },
+  cancelButton: {
+    flex: 1, borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8,
+    padding: 12, alignItems: 'center',
+  },
+  cancelText: { color: '#374151', fontWeight: '600', fontSize: 14 },
+  credBox: {
+    backgroundColor: '#f9fafb', borderRadius: 8, padding: 12, marginBottom: 8,
+  },
+  credLine: { fontSize: 13, color: '#6b7280', marginBottom: 4 },
+  credValue: { fontWeight: '700', color: '#111827', fontFamily: 'monospace' },
 });

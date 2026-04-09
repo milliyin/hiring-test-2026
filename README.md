@@ -144,7 +144,7 @@ Creates test users, a clinic, subscription, and appointments.
 ### Terminal 3 — Stripe webhook listener
 
 ```bash
-stripe listen --forward-to http://127.0.0.1:5001/clinic-test-local/us-central1/stripeWebhook
+stripe listen --forward-to http://127.0.0.1:5001/clinic-test-local/us-central1/handleStripeWebhook
 ```
 
 Copy the `whsec_...` secret it prints and paste it into `functions/.env` as `STRIPE_WEBHOOK_SECRET`.

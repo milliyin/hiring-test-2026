@@ -99,3 +99,19 @@ export async function removeStaffMember(clinicId: string, targetUserId: string):
     await functions().httpsCallable('removeStaffMember')({ clinicId, targetUserId });
   }
 }
+
+export async function inviteStaff(params: {
+  clinicId: string;
+  email: string;
+  displayName: string;
+}): Promise<{ tempPassword: string }> {
+  if (Platform.OS === 'web') {
+    const { httpsCallable } = functionsModule;
+    const fn = httpsCallable(functions, 'inviteStaff');
+    const result = await fn(params);
+    return result.data as { tempPassword: string };
+  } else {
+    const result = await functions().httpsCallable('inviteStaff')(params);
+    return result.data as { tempPassword: string };
+  }
+}

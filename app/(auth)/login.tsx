@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity,
-  StyleSheet, KeyboardAvoidingView, Platform, Alert,
+  StyleSheet, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { router } from 'expo-router';
 import { signIn } from '@/services/auth';
@@ -10,18 +10,22 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleLogin() {
-    if (!email || !password) {
-      return;
-    }
+    if (!email || !password) return;
+    setError(null);
     setIsLoading(true);
     try {
       await signIn(email, password);
       router.replace('/(app)/appointments');
     } catch (err: unknown) {
-      const msg = (err as { message?: string })?.message ?? 'Invalid email or password.';
-      Alert.alert('Sign in failed', msg);
+      const code = (err as { code?: string })?.code ?? '';
+      if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
+        setError('Invalid email or password.');
+      } else {
+        setError((err as { message?: string })?.message ?? 'Sign in failed. Please try again.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -57,6 +61,10 @@ export default function LoginScreen() {
           returnKeyType="go"
           onSubmitEditing={handleLogin}
         />
+
+        {error && (
+          <Text style={styles.error}>{error}</Text>
+        )}
 
         {Platform.OS === 'web' ? (
           <form onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
@@ -118,4 +126,8 @@ const styles = StyleSheet.create({
   buttonDisabled: { opacity: 0.6 },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   link: { textAlign: 'center', color: '#3b82f6', marginTop: 8 },
+  error: {
+    color: '#dc2626', fontSize: 14, backgroundColor: '#fee2e2',
+    borderRadius: 8, padding: 10, marginBottom: 8,
+  },
 });

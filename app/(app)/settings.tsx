@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert, Linking,
+  View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert, Linking, TextInput,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/hooks/useAuth';
@@ -8,6 +8,7 @@ import { useClinic } from '@/hooks/useClinic';
 import { useSubscription } from '@/hooks/useSubscription';
 import { signOut } from '@/services/auth';
 import { createCheckoutSession, initiateDowngrade } from '@/services/stripe';
+import { Platform } from 'react-native';
 import { PlanBadge } from '@/components/PlanBadge';
 import { PLAN_CONFIG } from '@/types/subscription';
 import type { Plan } from '@/types/subscription';
@@ -22,6 +23,45 @@ export default function SettingsScreen() {
   const [isUpgrading, setIsUpgrading] = useState(false);
   const [isDowngrading, setIsDowngrading] = useState(false);
   const [downgradeMessage, setDowngradeMessage] = useState<{ type: 'error' | 'conflict' | 'success'; text: string } | null>(null);
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function handleChangePassword() {
+    setPasswordMessage(null);
+    if (newPassword !== confirmPassword) {
+      setPasswordMessage({ ok: false, text: 'Passwords do not match.' });
+      return;
+    }
+    if (newPassword.length < 6) {
+      setPasswordMessage({ ok: false, text: 'Password must be at least 6 characters.' });
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      if (Platform.OS === 'web') {
+        const { getAuth, updatePassword } = require('firebase/auth');
+        const user = getAuth().currentUser;
+        await updatePassword(user, newPassword);
+      } else {
+        const auth = require('@react-native-firebase/auth').default;
+        await auth().currentUser?.updatePassword(newPassword);
+      }
+      setNewPassword('');
+      setConfirmPassword('');
+      setPasswordMessage({ ok: true, text: 'Password updated successfully.' });
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code ?? '';
+      const msg = code === 'auth/requires-recent-login'
+        ? 'Please sign out and sign in again before changing your password.'
+        : (err as { message?: string })?.message ?? 'Failed to update password.';
+      setPasswordMessage({ ok: false, text: msg });
+    } finally {
+      setChangingPassword(false);
+    }
+  }
 
   async function handleSignOut() {
     await signOut();
@@ -76,6 +116,50 @@ export default function SettingsScreen() {
           <Text style={styles.roleLabel}>Role:</Text>
           <Text style={styles.roleValue}>{profile?.role}</Text>
         </View>
+
+        {!showChangePassword ? (
+          <TouchableOpacity style={styles.changePasswordLink} onPress={() => setShowChangePassword(true)}>
+            <Text style={styles.changePasswordText}>Change password</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.changePasswordForm}>
+            {passwordMessage && (
+              <Text style={[styles.passwordMsg, passwordMessage.ok ? styles.passwordMsgOk : styles.passwordMsgErr]}>
+                {passwordMessage.text}
+              </Text>
+            )}
+            <TextInput
+              style={styles.passwordInput}
+              placeholder="New password"
+              value={newPassword}
+              onChangeText={setNewPassword}
+              secureTextEntry
+              returnKeyType="next"
+              blurOnSubmit={false}
+            />
+            <TextInput
+              style={styles.passwordInput}
+              placeholder="Confirm new password"
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              secureTextEntry
+              returnKeyType="go"
+              onSubmitEditing={handleChangePassword}
+            />
+            <View style={styles.passwordActions}>
+              <TouchableOpacity style={styles.cancelPasswordButton} onPress={() => { setShowChangePassword(false); setNewPassword(''); setConfirmPassword(''); }}>
+                <Text style={styles.cancelPasswordText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.savePasswordButton, changingPassword && { opacity: 0.5 }]}
+                onPress={handleChangePassword}
+                disabled={changingPassword}
+              >
+                <Text style={styles.savePasswordText}>{changingPassword ? 'Saving...' : 'Save'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
       </View>
 
       {/* Clinic info */}
@@ -211,6 +295,26 @@ const styles = StyleSheet.create({
   messageBannerConflict: { backgroundColor: '#fef9c3' },
   messageBannerError: { backgroundColor: '#fee2e2' },
   messageBannerText: { fontSize: 13, color: '#111827', lineHeight: 18 },
+  passwordMsg: { fontSize: 13, borderRadius: 6, padding: 8, marginBottom: 8 },
+  passwordMsgOk: { backgroundColor: '#dcfce7', color: '#166534' },
+  passwordMsgErr: { backgroundColor: '#fee2e2', color: '#991b1b' },
+  changePasswordLink: { marginTop: 12 },
+  changePasswordText: { fontSize: 14, color: '#3b82f6', fontWeight: '600' },
+  changePasswordForm: { marginTop: 12 },
+  passwordInput: {
+    borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8,
+    padding: 10, fontSize: 14, color: '#111827', marginBottom: 8, backgroundColor: '#f9fafb',
+  },
+  passwordActions: { flexDirection: 'row', gap: 8 },
+  cancelPasswordButton: {
+    flex: 1, borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8,
+    padding: 10, alignItems: 'center',
+  },
+  cancelPasswordText: { color: '#374151', fontWeight: '600' },
+  savePasswordButton: {
+    flex: 1, backgroundColor: '#3b82f6', borderRadius: 8, padding: 10, alignItems: 'center',
+  },
+  savePasswordText: { color: '#fff', fontWeight: '700' },
   signOutButton: {
     backgroundColor: '#fee2e2',
     borderRadius: 10,

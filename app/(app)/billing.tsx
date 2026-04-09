@@ -34,10 +34,10 @@ export default function BillingScreen() {
   const [addonMessage, setAddonMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
   useEffect(() => {
-    if (!clinic) return;
+    if (!clinic || !isOwner) return;
     getClinicAddons(clinic.id).then(setAddons);
     getClinicDiscounts(clinic.id).then(setDiscounts);
-  }, [clinic?.id]);
+  }, [clinic?.id, isOwner]);
 
   if (!isOwner) {
     return (
