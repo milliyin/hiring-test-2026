@@ -7,6 +7,8 @@ import {
   subscribeToPatientAppointments,
 } from '@/services/firestore';
 import type { Appointment } from '@/types/appointment';
+import type { User } from '@/types/user';
+import { getClinicMembers } from '@/services/firestore';
 import { format } from 'date-fns';
 
 export default function AppointmentsScreen() {
@@ -14,6 +16,7 @@ export default function AppointmentsScreen() {
   const { clinic } = useClinic();
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [memberMap, setMemberMap] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!profile) return;
@@ -25,11 +28,18 @@ export default function AppointmentsScreen() {
     } else if (isPatient) {
       unsubscribe = subscribeToPatientAppointments(profile.id, setAppointments);
     }
-    // TODO [CHALLENGE]: Patients not yet linked to a clinic see a stub.
-    // For now, they see an empty state with a message.
 
     return () => unsubscribe?.();
   }, [profile?.id, clinic?.id, isStaff, isPatient]);
+
+  useEffect(() => {
+    if (!clinic) return;
+    getClinicMembers(clinic.id).then((members) => {
+      const map: Record<string, string> = {};
+      members.forEach((m) => { map[m.id] = m.displayName; });
+      setMemberMap(map);
+    });
+  }, [clinic?.id]);
 
   function renderAppointment({ item }: { item: Appointment }) {
     const dt = item.datetime.toDate();
@@ -45,8 +55,10 @@ export default function AppointmentsScreen() {
         {isStaff && (
           <Text style={styles.meta}>Patient: {item.patientId}</Text>
         )}
+        {isPatient && (
+          <Text style={styles.meta}>Staff: {memberMap[item.staffId] ?? item.staffId}</Text>
+        )}
         {/* TODO [CHALLENGE]: Show attachments if extra_storage add-on is active */}
-        {/* TODO [CHALLENGE]: Staff member name (resolve staffId → displayName) */}
       </View>
     );
   }
