@@ -149,6 +149,13 @@ npm run seed
 - Staff: `anna.staff@test.com` / `marc.staff@test.com`
 - Patients: `patient1@test.com` / `patient2@test.com`
 
+> **Important:** The seed creates the clinic with a `free` plan and placeholder Stripe IDs. To test billing features (add-ons, downgrade, grace period), you must complete a real Stripe Checkout first:
+> 1. Log in as the owner (`sophie.owner@test.com`)
+> 2. Go to **Billing** and upgrade to any paid plan
+> 3. Complete the Stripe Checkout (use test card `4242 4242 4242 4242`)
+> 4. The webhook will update Firestore with a real `stripeCustomerId` and `stripeSubscriptionId`
+> 5. Add-on purchases and downgrade flows will work after this step
+
 ### Terminal 3 — Stripe webhook listener
 
 ```bash
