@@ -5,10 +5,10 @@ import { useClinic } from '@/hooks/useClinic';
 import {
   subscribeToClinicAppointments,
   subscribeToPatientAppointments,
+  getClinicMembers,
+  getClinicAddons,
 } from '@/services/firestore';
 import type { Appointment } from '@/types/appointment';
-import type { User } from '@/types/user';
-import { getClinicMembers } from '@/services/firestore';
 import { format } from 'date-fns';
 
 export default function AppointmentsScreen() {
@@ -17,6 +17,7 @@ export default function AppointmentsScreen() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [memberMap, setMemberMap] = useState<Record<string, string>>({});
+  const [hasExtraStorage, setHasExtraStorage] = useState(false);
 
   useEffect(() => {
     if (!profile) return;
@@ -39,6 +40,9 @@ export default function AppointmentsScreen() {
       members.forEach((m) => { map[m.id] = m.displayName; });
       setMemberMap(map);
     });
+    getClinicAddons(clinic.id).then((addons) => {
+      setHasExtraStorage(addons.some((a) => a.type === 'extra_storage'));
+    });
   }, [clinic?.id]);
 
   function renderAppointment({ item }: { item: Appointment }) {
@@ -58,7 +62,18 @@ export default function AppointmentsScreen() {
         {isPatient && (
           <Text style={styles.meta}>Staff: {memberMap[item.staffId] ?? item.staffId}</Text>
         )}
-        {/* TODO [CHALLENGE]: Show attachments if extra_storage add-on is active */}
+        {hasExtraStorage && (
+          <View style={styles.attachmentsRow}>
+            <Text style={styles.attachmentsLabel}>Attachments</Text>
+            {item.attachments && item.attachments.length > 0 ? (
+              item.attachments.map((url, i) => (
+                <Text key={i} style={styles.attachmentUrl} numberOfLines={1}>{url}</Text>
+              ))
+            ) : (
+              <Text style={styles.meta}>No attachments</Text>
+            )}
+          </View>
+        )}
       </View>
     );
   }
@@ -113,4 +128,7 @@ const styles = StyleSheet.create({
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
   emptyText: { fontSize: 17, fontWeight: '600', color: '#374151', marginBottom: 8 },
   emptyHint: { fontSize: 14, color: '#9ca3af', textAlign: 'center' },
+  attachmentsRow: { marginTop: 8, borderTopWidth: 1, borderTopColor: '#f3f4f6', paddingTop: 8 },
+  attachmentsLabel: { fontSize: 11, fontWeight: '600', color: '#6b7280', marginBottom: 4, textTransform: 'uppercase' },
+  attachmentUrl: { fontSize: 12, color: '#3b82f6', marginBottom: 2 },
 });

@@ -13,6 +13,5 @@ export type Appointment = {
   status: AppointmentStatus;
   datetime: Timestamp;
   notes: string | null;
-  // TODO [CHALLENGE]: Add attachments field — only available with extra_storage add-on
-  // attachments?: string[]; // storage URLs
+  attachments?: string[]; // storage URLs — only populated when extra_storage add-on is active
 };

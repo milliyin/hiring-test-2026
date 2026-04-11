@@ -62,7 +62,7 @@ git clone <your-fork-url>
 cd hiring-test-2026
 
 npm install
-cd functions && npm install && cd ..
+cd functions && npm install && npm run build && cd ..
 ```
 
 ### 2. Configure environment
@@ -135,6 +135,14 @@ npm run seed
 ```
 
 Creates test users, a clinic, subscription, and appointments.
+
+**To reset and reseed** (e.g. after running tests or corrupting state):
+
+```bash
+curl -X DELETE "http://localhost:8080/emulator/v1/projects/clinic-test-local/databases/(default)/documents"
+curl -X DELETE "http://localhost:9099/emulator/v1/projects/clinic-test-local/accounts"
+npm run seed
+```
 
 **Test accounts** (all passwords: `test1234`):
 - Owner: `sophie.owner@test.com`
