@@ -100,6 +100,16 @@ export async function removeStaffMember(clinicId: string, targetUserId: string):
   }
 }
 
+export async function removeAddon(clinicId: string, addonId: string): Promise<void> {
+  if (Platform.OS === 'web') {
+    const { httpsCallable } = functionsModule;
+    const fn = httpsCallable(functions, 'removeAddon');
+    await fn({ clinicId, addonId });
+  } else {
+    await functions().httpsCallable('removeAddon')({ clinicId, addonId });
+  }
+}
+
 export async function inviteStaff(params: {
   clinicId: string;
   email: string;

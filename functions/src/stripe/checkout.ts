@@ -398,3 +398,41 @@ export async function removeStaffMemberFromClinic(
     tx.update(clinicRef, { 'seats.used': FieldValue.increment(-1) });
   });
 }
+
+/**
+ * Removes an active add-on from a clinic's Stripe subscription and marks it inactive in Firestore.
+ */
+export const removeAddon = functions.https.onCall(async (request) => {
+  if (!request.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
+
+  const { clinicId, addonId } = request.data as { clinicId: string; addonId: string };
+
+  const db = admin.firestore();
+
+  // Verify caller is the clinic owner
+  const userDoc = await db.collection('users').doc(request.auth.uid).get();
+  const user = userDoc.data();
+  if (!user || user.role !== 'owner' || user.clinicId !== clinicId) {
+    throw new functions.https.HttpsError('permission-denied', 'Only clinic owners can manage add-ons');
+  }
+
+  // Load the addon record
+  const addonRef = db.collection('addons').doc(clinicId).collection('items').doc(addonId);
+  const addonDoc = await addonRef.get();
+  if (!addonDoc.exists) throw new functions.https.HttpsError('not-found', 'Add-on not found');
+
+  const addon = addonDoc.data()!;
+  const stripeItemId: string = addon.stripeItemId;
+
+  // Remove the subscription item from Stripe (if it's a real Stripe item)
+  if (stripeItemId && !stripeItemId.includes('REPLACE')) {
+    await getStripe().subscriptionItems.del(stripeItemId, { proration_behavior: 'create_prorations' });
+  }
+
+  // Mark as inactive in Firestore + remove from clinic.addons array
+  const clinicRef = db.collection('clinics').doc(clinicId);
+  await db.runTransaction(async (tx) => {
+    tx.update(addonRef, { active: false });
+    tx.update(clinicRef, { addons: FieldValue.arrayRemove(addonId) });
+  });
+})

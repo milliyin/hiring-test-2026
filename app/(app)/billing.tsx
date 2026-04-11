@@ -8,11 +8,12 @@ import { useClinic } from '@/hooks/useClinic';
 import { useSubscription } from '@/hooks/useSubscription';
 import { useClinicStore } from '@/store/clinicStore';
 import { getClinicAddons, getClinicDiscounts } from '@/services/firestore';
-import { purchaseAddon } from '@/services/stripe';
+import { purchaseAddon, removeAddon } from '@/services/stripe';
 import { PlanBadge } from '@/components/PlanBadge';
 import { SeatUsageBar } from '@/components/SeatUsageBar';
 import { DiscountTag } from '@/components/DiscountTag';
 import { ADDON_CONFIG } from '@/types/subscription';
+import { isDiscountValid } from '@/types/discount';
 import type { Addon } from '@/types/subscription';
 import type { Discount } from '@/types/discount';
 
@@ -32,6 +33,7 @@ export default function BillingScreen() {
   const [discountCode, setDiscountCode] = useState('');
   const [isPurchasing, setIsPurchasing] = useState(false);
   const [addonMessage, setAddonMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [removingAddonId, setRemovingAddonId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!clinic || !isOwner) return;
@@ -49,6 +51,19 @@ export default function BillingScreen() {
 
   function handleUpgrade() {
     router.push('/(app)/settings');
+  }
+
+  async function handleRemoveAddon(addonId: string) {
+    if (!clinic || removingAddonId) return;
+    setRemovingAddonId(addonId);
+    try {
+      await removeAddon(clinic.id, addonId);
+      setAddons((prev) => prev.filter((a) => a.id !== addonId));
+    } catch (err: unknown) {
+      setAddonMessage({ type: 'error', text: (err as { message?: string })?.message ?? 'Failed to remove add-on.' });
+    } finally {
+      setRemovingAddonId(null);
+    }
   }
 
   function handlePurchaseAddon(addonType: string) {
@@ -131,11 +146,21 @@ export default function BillingScreen() {
         ) : (
           addons.map((addon) => (
             <View key={addon.id} style={styles.addonRow}>
-              <View>
+              <View style={{ flex: 1 }}>
                 <Text style={styles.addonName}>{ADDON_CONFIG[addon.type].label}</Text>
                 <Text style={styles.addonDesc}>{ADDON_CONFIG[addon.type].description}</Text>
               </View>
-              <Text style={styles.addonPrice}>CHF {addon.price}/mo</Text>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={styles.addonPrice}>CHF {addon.price}/mo</Text>
+                <TouchableOpacity
+                  onPress={() => handleRemoveAddon(addon.id)}
+                  disabled={removingAddonId === addon.id}
+                >
+                  <Text style={styles.removeAddonText}>
+                    {removingAddonId === addon.id ? 'Removing...' : 'Remove'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
           ))
         )}
@@ -212,14 +237,25 @@ export default function BillingScreen() {
         )}
       </View>
 
-      {/* Active discounts */}
+      {/* Discounts */}
       {discounts.length > 0 && (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Active discounts</Text>
-          {discounts.map((d) => (
-            <DiscountTag key={d.id} discount={d} />
-          ))}
-          {/* TODO [CHALLENGE]: Scenario 5 — show expired discount state clearly */}
+          {discounts.filter((d) => isDiscountValid(d)).length > 0 && (
+            <>
+              <Text style={styles.sectionTitle}>Active discounts</Text>
+              {discounts.filter((d) => isDiscountValid(d)).map((d) => (
+                <DiscountTag key={d.id} discount={d} />
+              ))}
+            </>
+          )}
+          {discounts.filter((d) => !isDiscountValid(d)).length > 0 && (
+            <>
+              <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Expired discounts</Text>
+              {discounts.filter((d) => !isDiscountValid(d)).map((d) => (
+                <DiscountTag key={d.id} discount={d} />
+              ))}
+            </>
+          )}
         </View>
       )}
 
@@ -300,4 +336,5 @@ const styles = StyleSheet.create({
   upgradeText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   restricted: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
   restrictedText: { fontSize: 16, color: '#6b7280', textAlign: 'center' },
+  removeAddonText: { fontSize: 12, color: '#ef4444', marginTop: 4 },
 });
