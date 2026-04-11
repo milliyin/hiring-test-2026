@@ -158,9 +158,13 @@ export const purchaseAddon = functions.https.onCall(async (request) => {
   const { ADDON_CONFIG_SERVER } = await import('./planConfig');
   const addonConfig = ADDON_CONFIG_SERVER[addonType];
 
-  // ── Discount validation (server-side, non-negotiable) ────────────────────────
+  // ── Discount validation + atomic reservation ────────────────────────────────
+  // We check AND increment usedCount in a single transaction BEFORE calling Stripe.
+  // This closes the race window where two concurrent requests could both pass
+  // the usedCount < usageLimit check before either increments the counter.
   let stripeCouponId: string | undefined;
   let discountDocRef: admin.firestore.DocumentReference | undefined;
+  let discountPercentOff: number | undefined;
 
   if (discountCode) {
     const discountSnap = await db.collection('discounts')
@@ -174,19 +178,8 @@ export const purchaseAddon = functions.https.onCall(async (request) => {
 
     const discountDoc = discountSnap.docs[0];
     const d = discountDoc.data();
-    discountDocRef = discountDoc.ref;
 
-    // Reject expired / exhausted codes
-    const expired = d.validUntil.toDate() <= new Date();
-    const exhausted = d.usedCount >= d.usageLimit;
-    if (expired || exhausted) {
-      throw new functions.https.HttpsError(
-        'failed-precondition',
-        `Discount code "${discountCode}" is ${expired ? 'expired' : 'no longer valid'}`,
-      );
-    }
-
-    // Reject codes that do not apply to add-ons
+    // Reject codes that do not apply to add-ons (no need to reserve first)
     const at = d.appliesToAddons;
     const appliesHere = at === 'all' || (Array.isArray(at) && at.includes(addonType));
     if (!appliesHere) {
@@ -196,9 +189,28 @@ export const purchaseAddon = functions.https.onCall(async (request) => {
       );
     }
 
-    // Create a one-off Stripe coupon for this percentage
+    // Atomically validate and reserve the discount slot
+    // Transaction reads the latest usedCount — no stale reads possible
+    await db.runTransaction(async (tx) => {
+      const fresh = await tx.get(discountDoc.ref);
+      const fd = fresh.data()!;
+      const expired = fd.validUntil.toDate() <= new Date();
+      const exhausted = fd.usedCount >= fd.usageLimit;
+      if (expired || exhausted) {
+        throw new functions.https.HttpsError(
+          'failed-precondition',
+          `Discount code "${discountCode}" is ${expired ? 'expired' : 'no longer valid'}`,
+        );
+      }
+      // Reserve the slot — if Stripe fails below, we release it
+      tx.update(discountDoc.ref, { usedCount: FieldValue.increment(1) });
+    });
+
+    discountDocRef = discountDoc.ref;
+    discountPercentOff = d.percentOff;
+
     const coupon = await getStripe().coupons.create({
-      percent_off: d.percentOff,
+      percent_off: discountPercentOff,
       duration: 'forever',
       name: discountCode,
     });
@@ -215,6 +227,10 @@ export const purchaseAddon = functions.https.onCall(async (request) => {
       ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
     });
   } catch (err: unknown) {
+    // Release the reserved discount slot if Stripe failed
+    if (discountDocRef) {
+      await discountDocRef.update({ usedCount: FieldValue.increment(-1) });
+    }
     const stripeErr = err as { type?: string; param?: string };
     if (stripeErr?.type === 'StripeInvalidRequestError' && stripeErr?.param === 'plan') {
       throw new functions.https.HttpsError('already-exists', `Add-on ${addonType} is already active on this subscription`);
@@ -222,7 +238,7 @@ export const purchaseAddon = functions.https.onCall(async (request) => {
     throw err;
   }
 
-  // ── Write to Firestore atomically ────────────────────────────────────────────
+  // ── Write addon to Firestore ─────────────────────────────────────────────────
   const addonId = `addon_${addonType}_${Date.now()}`;
   const addonRef = db.collection('addons').doc(clinicId).collection('items').doc(addonId);
   const clinicRef = db.collection('clinics').doc(clinicId);
@@ -235,20 +251,11 @@ export const purchaseAddon = functions.https.onCall(async (request) => {
       active: true,
       stripeItemId: stripeItem.id,
     });
-    tx.update(clinicRef, {
-      addons: FieldValue.arrayUnion(addonId),
-    });
-    if (discountDocRef) {
-      tx.update(discountDocRef, {
-        usedCount: FieldValue.increment(1),
-      });
-    }
+    tx.update(clinicRef, { addons: FieldValue.arrayUnion(addonId) });
     // Extra Seats add-on: bump seats.max immediately
     if (addonType === 'extra_seats') {
       const { ADDON_SEATS_BONUS } = await import('./planConfig');
-      tx.update(clinicRef, {
-        'seats.max': FieldValue.increment(ADDON_SEATS_BONUS),
-      });
+      tx.update(clinicRef, { 'seats.max': FieldValue.increment(ADDON_SEATS_BONUS) });
     }
   });
 

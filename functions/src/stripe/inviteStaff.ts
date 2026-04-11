@@ -36,15 +36,9 @@ export const inviteStaff = functions.https.onCall(async (request) => {
     throw new functions.https.HttpsError('permission-denied', 'Only the clinic owner can invite staff');
   }
 
-  // Enforce seat availability and subscription status server-side
-  const [subSnap, clinicSnap] = await Promise.all([
-    db.doc(`subscriptions/${clinicId}`).get(),
-    db.doc(`clinics/${clinicId}`).get(),
-  ]);
-
+  // Enforce subscription status — checked outside transaction (status changes are infrequent)
+  const subSnap = await db.doc(`subscriptions/${clinicId}`).get();
   const sub = subSnap.data();
-  const clinic = clinicSnap.data();
-
   if (!sub || sub.status !== 'active') {
     throw new functions.https.HttpsError(
       'failed-precondition',
@@ -54,20 +48,12 @@ export const inviteStaff = functions.https.onCall(async (request) => {
     );
   }
 
-  if (!clinic || clinic.seats.used >= clinic.seats.max) {
-    throw new functions.https.HttpsError(
-      'resource-exhausted',
-      `Seat limit reached (${clinic?.seats.used ?? 0}/${clinic?.seats.max ?? 0}). ` +
-        'Upgrade your plan or purchase the Extra Seats add-on.',
-    );
-  }
-
   // Generate a temporary password
   const tempPassword =
     Math.random().toString(36).slice(-8) +
     Math.random().toString(36).slice(-4).toUpperCase();
 
-  // Create a new Auth user, or reset the password if they already have an account
+  // Create Auth user before the transaction (Auth is not transactional)
   let uid: string;
   try {
     const created = await admin.auth().createUser({ email, password: tempPassword, displayName });
@@ -82,12 +68,23 @@ export const inviteStaff = functions.https.onCall(async (request) => {
     }
   }
 
-  // Atomically create user doc + seat record + increment seat counter
+  // Atomically: re-check seat availability + create user doc + seat record + increment
+  // Reading clinicRef inside the transaction means Firestore serialises concurrent writes —
+  // two simultaneous invites cannot both pass the seats.used < seats.max check.
   const userRef = db.doc(`users/${uid}`);
   const seatRef = db.doc(`seats/${clinicId}/members/${uid}`);
   const clinicRef = db.doc(`clinics/${clinicId}`);
 
   await db.runTransaction(async (tx) => {
+    const clinicSnap = await tx.get(clinicRef);
+    const clinic = clinicSnap.data();
+    if (!clinic || clinic.seats.used >= clinic.seats.max) {
+      throw new functions.https.HttpsError(
+        'resource-exhausted',
+        `Seat limit reached (${clinic?.seats.used ?? 0}/${clinic?.seats.max ?? 0}). ` +
+          'Upgrade your plan or purchase the Extra Seats add-on.',
+      );
+    }
     tx.set(userRef, {
       displayName,
       email,

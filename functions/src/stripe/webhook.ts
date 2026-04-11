@@ -258,10 +258,21 @@ async function handleCheckoutCompleted(
     // Increment usedCount for the discount applied at checkout (Scenario 5).
     // Done here — after confirmed payment — not at session creation, so abandoned
     // checkouts do not consume a discount use.
+    // Re-validate inside the transaction to close the race window where two concurrent
+    // checkouts both pass the usedCount check before either increments.
     const discountDocId = session.metadata?.discountDocId;
     if (discountDocId) {
       const discountRef = db.collection('discounts').doc(discountDocId);
-      tx.update(discountRef, { usedCount: FieldValue.increment(1) });
+      const discountSnap = await tx.get(discountRef);
+      if (discountSnap.exists) {
+        const d = discountSnap.data()!;
+        if (d.usedCount < d.usageLimit) {
+          tx.update(discountRef, { usedCount: FieldValue.increment(1) });
+        }
+        // If exhausted: discount was already consumed by a concurrent checkout.
+        // The coupon is already applied to the Stripe subscription — we don't
+        // strip it retroactively (Scenario 5 decision: honor committed deals).
+      }
     }
   });
 }
