@@ -21,7 +21,9 @@ export default function LoginScreen() {
       router.replace('/(app)/appointments');
     } catch (err: unknown) {
       const code = (err as { code?: string })?.code ?? '';
-      if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
+      if (code === 'auth/user-not-found') {
+        setError('No account found for this email. Please sign up first.');
+      } else if (code === 'auth/invalid-credential' || code === 'auth/wrong-password') {
         setError('Invalid email or password.');
       } else {
         setError((err as { message?: string })?.message ?? 'Sign in failed. Please try again.');
@@ -63,7 +65,12 @@ export default function LoginScreen() {
         />
 
         {error && (
-          <Text style={styles.error}>{error}</Text>
+          <TouchableOpacity
+            onPress={error.includes('sign up') ? () => router.push('/(auth)/signup') : undefined}
+            activeOpacity={error.includes('sign up') ? 0.7 : 1}
+          >
+            <Text style={styles.error}>{error}</Text>
+          </TouchableOpacity>
         )}
 
         {Platform.OS === 'web' ? (
