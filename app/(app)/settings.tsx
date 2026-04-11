@@ -23,6 +23,7 @@ export default function SettingsScreen() {
   const [isUpgrading, setIsUpgrading] = useState(false);
   const [isDowngrading, setIsDowngrading] = useState(false);
   const [downgradeMessage, setDowngradeMessage] = useState<{ type: 'error' | 'conflict' | 'success'; text: string } | null>(null);
+  const [confirmingDowngrade, setConfirmingDowngrade] = useState<Plan | null>(null);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -86,11 +87,12 @@ export default function SettingsScreen() {
 
   async function handleDowngrade(targetPlan: Plan) {
     if (!clinic || isDowngrading) return;
+    setConfirmingDowngrade(null);
     setIsDowngrading(true);
     setDowngradeMessage(null);
     try {
       await initiateDowngrade({ clinicId: clinic.id, targetPlan: targetPlan as 'free' | 'pro' | 'premium' });
-      setDowngradeMessage({ type: 'success', text: `Downgraded to ${targetPlan}. Firestore will update shortly.` });
+      setDowngradeMessage({ type: 'success', text: `Downgraded to ${targetPlan}. Changes take effect shortly.` });
     } catch (err: unknown) {
       const raw = (err as { message?: string })?.message ?? '';
       console.error('[handleDowngrade] error:', err);
@@ -221,22 +223,47 @@ export default function SettingsScreen() {
                 const planOrder: Plan[] = ['free', 'pro', 'premium', 'vip'];
                 return planOrder.indexOf(p) < planOrder.indexOf(plan);
               }).map((targetPlan) => (
-                <TouchableOpacity
-                  key={targetPlan}
-                  style={[styles.planButton, styles.planButtonDowngrade, isDowngrading && { opacity: 0.5 }]}
-                  onPress={() => handleDowngrade(targetPlan)}
-                  disabled={isDowngrading}
-                >
-                  <View>
-                    <Text style={styles.planButtonName}>{PLAN_CONFIG[targetPlan].label}</Text>
-                    <Text style={styles.planButtonPrice}>
-                      {PLAN_CONFIG[targetPlan].price === 0 ? 'Free' : `CHF ${PLAN_CONFIG[targetPlan].price}/mo`}
-                      {' · '}
-                      {PLAN_CONFIG[targetPlan].seats === Infinity ? 'Unlimited' : PLAN_CONFIG[targetPlan].seats} seats
-                    </Text>
-                  </View>
-                  <Text style={[styles.planButtonAction, styles.downgradeText]}>Downgrade</Text>
-                </TouchableOpacity>
+                <View key={targetPlan}>
+                  <TouchableOpacity
+                    style={[styles.planButton, styles.planButtonDowngrade, isDowngrading && { opacity: 0.5 }]}
+                    onPress={() => setConfirmingDowngrade(confirmingDowngrade === targetPlan ? null : targetPlan)}
+                    disabled={isDowngrading}
+                  >
+                    <View>
+                      <Text style={styles.planButtonName}>{PLAN_CONFIG[targetPlan].label}</Text>
+                      <Text style={styles.planButtonPrice}>
+                        {PLAN_CONFIG[targetPlan].price === 0 ? 'Free' : `CHF ${PLAN_CONFIG[targetPlan].price}/mo`}
+                        {' · '}
+                        {PLAN_CONFIG[targetPlan].seats === Infinity ? 'Unlimited' : PLAN_CONFIG[targetPlan].seats} seats
+                      </Text>
+                    </View>
+                    <Text style={[styles.planButtonAction, styles.downgradeText]}>Downgrade</Text>
+                  </TouchableOpacity>
+                  {confirmingDowngrade === targetPlan && (
+                    <View style={styles.confirmDowngradeBox}>
+                      <Text style={styles.confirmDowngradeText}>
+                        Downgrade to {PLAN_CONFIG[targetPlan].label}? This takes effect immediately.
+                      </Text>
+                      <View style={styles.confirmDowngradeActions}>
+                        <TouchableOpacity
+                          style={styles.confirmDowngradeCancel}
+                          onPress={() => setConfirmingDowngrade(null)}
+                        >
+                          <Text style={styles.confirmDowngradeCancelText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.confirmDowngradeConfirm}
+                          onPress={() => handleDowngrade(targetPlan)}
+                          disabled={isDowngrading}
+                        >
+                          <Text style={styles.confirmDowngradeConfirmText}>
+                            {isDowngrading ? 'Processing...' : 'Confirm'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+                </View>
               ))}
             </>
           )}
@@ -290,6 +317,20 @@ const styles = StyleSheet.create({
   planButtonPrice: { fontSize: 12, color: '#6b7280', marginTop: 2 },
   planButtonAction: { fontSize: 14, fontWeight: '700', color: '#3b82f6' },
   downgradeText: { color: '#9ca3af' },
+  confirmDowngradeBox: {
+    backgroundColor: '#fef2f2', borderRadius: 8, padding: 12, marginTop: 4, marginBottom: 4,
+  },
+  confirmDowngradeText: { fontSize: 13, color: '#374151', marginBottom: 10 },
+  confirmDowngradeActions: { flexDirection: 'row', gap: 8 },
+  confirmDowngradeCancel: {
+    flex: 1, borderWidth: 1, borderColor: '#d1d5db', borderRadius: 6,
+    padding: 8, alignItems: 'center',
+  },
+  confirmDowngradeCancelText: { fontSize: 13, color: '#374151', fontWeight: '600' },
+  confirmDowngradeConfirm: {
+    flex: 1, backgroundColor: '#ef4444', borderRadius: 6, padding: 8, alignItems: 'center',
+  },
+  confirmDowngradeConfirmText: { fontSize: 13, color: '#fff', fontWeight: '700' },
   messageBanner: { borderRadius: 8, padding: 12, marginTop: 8, marginBottom: 4 },
   messageBannerSuccess: { backgroundColor: '#dcfce7' },
   messageBannerConflict: { backgroundColor: '#fef9c3' },
