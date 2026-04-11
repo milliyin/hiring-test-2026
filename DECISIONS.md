@@ -172,6 +172,42 @@ This project targets both Expo Web and React Native (iOS/Android). The two platf
 
 ---
 
+## Race condition hardening: atomic transactions for seat and discount operations
+
+**Choice: All seat and discount checks are performed inside Firestore transactions, not before them.**
+
+Two concurrent requests could both pass a `seats.used < seats.max` or `usedCount < usageLimit` check before either write commits. This is a classic TOCTOU (time-of-check to time-of-use) race.
+
+**inviteStaff — seat race:**
+The seat availability check was originally performed outside the transaction, then `seats.used` was incremented inside it. Two simultaneous invite calls could both read `seats.used = 2` and `seats.max = 3`, both pass, and both increment — ending up at `seats.used = 4` with only 3 seats allowed.
+
+Fix: `clinicRef` is read inside the transaction via `tx.get()`. Firestore serialises concurrent transactions that read and write the same document — the second transaction will retry with the updated value and fail the check.
+
+**purchaseAddon — discount race:**
+`usedCount` was checked before the Stripe API call but incremented after it (in the addon write transaction). Two concurrent purchases with the same discount code could both pass `usedCount < usageLimit` before either incremented.
+
+Fix: a dedicated transaction atomically reads and increments `usedCount` before the Stripe call. If Stripe subsequently fails, a compensating write decrements it back. This means the slot is reserved during the Stripe API call — the window is closed.
+
+**createCheckoutSession — webhook discount race:**
+The `usedCount` increment for base-plan checkouts intentionally happens in the `checkout.session.completed` webhook (not at session creation), to avoid consuming a use on an abandoned checkout. The race remains possible if two users complete checkout simultaneously with the same code. Fix: the webhook re-validates `usedCount < usageLimit` inside its transaction before incrementing. If exhausted, the increment is skipped — the Stripe coupon remains on the subscription (honoring the committed deal per Scenario 5 decision).
+
+---
+
+## Add-on removal: immediate cancellation with Stripe proration
+
+**Choice: `removeAddon` deletes the Stripe subscription item immediately with `proration_behavior: 'create_prorations'`.**
+
+The add-on is cancelled at the moment the owner requests it. Stripe calculates the unused portion of the billing cycle and applies it as a credit to the next invoice — the customer is not charged for days they did not use.
+
+**Why not end-of-cycle cancellation:**
+- Immediate removal is what owners expect — if they remove Extra Storage, they expect attachments to stop being available now, not at cycle end.
+- Proration credit is the industry-standard SaaS approach and requires no extra bookkeeping on our side.
+- Stripe handles the credit automatically — we make one API call and Firestore is updated atomically.
+
+**Firestore update:** `addon.active = false` and `clinic.addons` array updated in a single transaction after the Stripe call succeeds.
+
+---
+
 ## Test strategy: integration tests against real emulator, not mocks
 
 **Choice: `webhook.test.ts` and `checkout.test.ts` run against the live Firestore emulator via the Admin SDK. No Firestore mocking.**
