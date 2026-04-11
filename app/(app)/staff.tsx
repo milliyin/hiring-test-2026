@@ -243,6 +243,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     alignItems: 'center',
+    marginTop: 12,
   },
   inviteButtonDisabled: { backgroundColor: '#9ca3af' },
   inviteText: { color: '#fff', fontWeight: '700', fontSize: 15 },
